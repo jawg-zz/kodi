@@ -369,6 +369,23 @@ async function main() {
       q("select record_payment($1,$2,$3,'mpesa_manual','DUPECODE123')", [org1, t1, 500]),
       "duplicate key");
 
+    // --- service-role exemption (M-Pesa callback path, no JWT) ----------------
+    await asSuper();
+    await q(`select set_config('request.jwt.claims', $1, false)`,
+      [JSON.stringify({ role: "service_role" })]);
+    await q("set role authenticated");
+    const svcPay = (await q("select record_payment($1,$2,$3,'mpesa_stk','SVC123') as id",
+      [org1, t1, 700])).rows[0].id;
+    check("service-role callback writes payment (no JWT)", !!svcPay, String(svcPay));
+    const svcRcp = (await q("select next_receipt_no($1) as r", [org1])).rows[0].r;
+    check("service-role receipt numbering works", /^RCP-/.test(svcRcp), svcRcp);
+    // anon (null JWT, no service role) still blocked
+    await q(`select set_config('request.jwt.claims', $1, false)`, [JSON.stringify({})]);
+    await expectError("anon still blocked from record_payment", () =>
+      q("select record_payment($1,$2,$3,'cash')", [org1, t1, 100]), "not a member");
+    await expectError("anon still blocked from receipt numbering", () =>
+      q("select next_receipt_no($1)", [org1]), "not a member");
+
     await asSuper();
   } finally {
     await client.end().catch(() => {});

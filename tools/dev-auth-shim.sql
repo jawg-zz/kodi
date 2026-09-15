@@ -17,6 +17,11 @@ language sql stable as $$
   select (nullif(current_setting('request.jwt.claims', true), '')::json ->> 'sub')::uuid
 $$;
 
+create or replace function auth.jwt() returns jsonb
+language sql stable as $$
+  select nullif(current_setting('request.jwt.claims', true), '')::jsonb
+$$;
+
 do $$
 begin
   if not exists (select 1 from pg_roles where rolname = 'anon') then
