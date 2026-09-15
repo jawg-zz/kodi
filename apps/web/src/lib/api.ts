@@ -332,19 +332,24 @@ export async function updateOrg(id: string, values: Partial<Org>): Promise<void>
 }
 
 export async function createOrg(name: string, planCode: string): Promise<Org> {
-  const userId = (await supabase.auth.getUser()).data.user?.id;
-  if (!userId) throw new Error("You must be signed in to create an organization.");
-  const { data: org, error } = await supabase
-    .from("orgs")
-    .insert({ name, plan_code: planCode, subscription_status: "trialing" })
-    .select("*")
-    .single();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error("You must be signed in to create an organization.");
+  const profile = await supabase
+    .from("profiles")
+    .select("full_name")
+    .eq("id", user.user.id)
+    .maybeSingle();
+  const { data, error } = await supabase.rpc("create_org_with_owner", {
+    p_name: name,
+    p_plan_code: planCode,
+    p_full_name:
+      (profile.data as { full_name?: string } | null)?.full_name ??
+      (user.user.user_metadata?.full_name as string | undefined) ??
+      "",
+    p_phone: (user.user.user_metadata?.phone as string | undefined) ?? null,
+  });
   boom(error);
-  const { error: mErr } = await supabase
-    .from("org_members")
-    .insert({ org_id: (org as Org).id, user_id: userId, role: "owner" });
-  boom(mErr);
-  return org as Org;
+  return data as unknown as Org;
 }
 
 export interface InviteResult {

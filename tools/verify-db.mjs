@@ -267,6 +267,33 @@ async function main() {
     const bInv = await q("select count(*)::int as n from invoices");
     check("landlord B has no invoices yet", bInv.rows[0].n === 0, String(bInv.rows[0].n));
 
+    // --- atomic onboarding: brand-new user with no rows anywhere ---------------
+    await asSuper();
+    const userC = (await seed(
+      "insert into auth.users (email) values ('newbie@test.dev') returning id")).id;
+    await asUser(userC);
+    const newOrg = (await q(
+      "select create_org_with_owner('Fresh Start', 'growth', 'Newbie', '0711000000') as org")).rows[0].org;
+    check("create_org_with_owner returns org id", !!newOrg.id, JSON.stringify(newOrg));
+    check("onboarding sets plan", newOrg.plan_code === "growth", newOrg.plan_code);
+    const cMember = (await q(
+      "select role from org_members where org_id=$1 and user_id=$2", [newOrg.id, userC])).rows[0];
+    check("onboarding adds caller as owner", cMember?.role === "owner", cMember?.role);
+    const cProfile = (await q("select full_name, phone from profiles where id=$1", [userC])).rows[0];
+    check("onboarding upserts profile", cProfile?.full_name === "Newbie", JSON.stringify(cProfile));
+    const cOrgs = await q("select count(*)::int as n from orgs");
+    check("new owner sees own org via RLS", cOrgs.rows[0].n === 1, String(cOrgs.rows[0].n));
+
+    await expectError("onboarding requires a name", () =>
+      q("select create_org_with_owner('  ')"), "business a name");
+    await expectError("onboarding rejects bad plan", () =>
+      q("select create_org_with_owner('X', 'enterprise')"), "invalid plan");
+    await asSuper();
+    await q(`select set_config('request.jwt.claims', $1, false)`, [JSON.stringify({})]);
+    await q("set role authenticated");
+    await expectError("onboarding requires sign-in", () =>
+      q("select create_org_with_owner('NoAuth')"), "signed in");
+
     await asSuper();
   } finally {
     await client.end().catch(() => {});
