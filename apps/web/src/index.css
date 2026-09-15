@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-50: #eef7f2;
+  --color-brand-100: #d6ecdf;
+  --color-brand-500: #1e9e5c;
+  --color-brand-600: #178049;
+  --color-brand-700: #13663b;
+}
+
+body {
+  @apply bg-slate-100 text-slate-900 antialiased;
+}
+
+/* ---------- Print: A4 documents ---------- */
+@page {
+  size: A4;
+  margin: 14mm;
+}
+
+@media print {
+  body {
+    background: white !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-doc {
+    box-shadow: none !important;
+    margin: 0 !important;
+    max-width: none !important;
+    border: none !important;
+  }
+}

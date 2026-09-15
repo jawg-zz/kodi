@@ -1,0 +1,16 @@
+node_modules/
+dist/
+apps/web/dist/
+.env
+.env.local
+.env.*.local
+apps/web/.env
+apps/web/.env.local
+*.local
+.vercel
+.netlify
+supabase/.branches
+supabase/.temp
+tools/.pgdata/
+
+.vercel

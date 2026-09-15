@@ -1,0 +1,410 @@
+import { supabase } from "./supabase";
+import type {
+  DepositSettlement,
+  Invoice,
+  InvoiceWithRefs,
+  MpesaTransaction,
+  Org,
+  PaymentWithRefs,
+  Property,
+  Tenant,
+  TenantUserLink,
+  Unit,
+  UnitWithTenant,
+} from "./types";
+
+function boom(error: { message: string } | null): void {
+  if (error) throw new Error(error.message);
+}
+
+// ---------------------------------------------------------------------------
+// Properties & units
+// ---------------------------------------------------------------------------
+export async function listProperties(orgId: string): Promise<Property[]> {
+  const { data, error } = await supabase
+    .from("properties")
+    .select("*")
+    .eq("org_id", orgId)
+    .order("name");
+  boom(error);
+  return (data ?? []) as Property[];
+}
+
+export async function listUnits(orgId: string): Promise<UnitWithTenant[]> {
+  const { data, error } = await supabase
+    .from("units")
+    .select("*, tenant:tenants!units_current_tenant_fkey(id, full_name, phone, status, deposit_held)")
+    .eq("org_id", orgId)
+    .order("label");
+  boom(error);
+  return (data ?? []) as unknown as UnitWithTenant[];
+}
+
+export async function countUnits(orgId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from("units")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId);
+  boom(error);
+  return count ?? 0;
+}
+
+export async function createProperty(
+  orgId: string,
+  values: Pick<Property, "name" | "property_type" | "location" | "notes">
+): Promise<Property> {
+  const { data, error } = await supabase
+    .from("properties")
+    .insert({ ...values, org_id: orgId })
+    .select("*")
+    .single();
+  boom(error);
+  return data as Property;
+}
+
+export async function updateProperty(id: string, values: Partial<Property>): Promise<void> {
+  const { error } = await supabase.from("properties").update(values).eq("id", id);
+  boom(error);
+}
+
+export async function deleteProperty(id: string): Promise<void> {
+  const { error } = await supabase.from("properties").delete().eq("id", id);
+  boom(error);
+}
+
+export async function createUnit(
+  orgId: string,
+  values: Omit<Unit, "id" | "org_id" | "status" | "current_tenant_id">
+): Promise<Unit> {
+  const { data, error } = await supabase
+    .from("units")
+    .insert({ ...values, org_id: orgId })
+    .select("*")
+    .single();
+  boom(error);
+  return data as Unit;
+}
+
+export async function updateUnit(id: string, values: Partial<Unit>): Promise<void> {
+  const { error } = await supabase.from("units").update(values).eq("id", id);
+  boom(error);
+}
+
+export async function deleteUnit(id: string): Promise<void> {
+  const { error } = await supabase.from("units").delete().eq("id", id);
+  boom(error);
+}
+
+// ---------------------------------------------------------------------------
+// Tenants
+// ---------------------------------------------------------------------------
+export async function listTenants(orgId: string): Promise<Tenant[]> {
+  const { data, error } = await supabase
+    .from("tenants")
+    .select("*")
+    .eq("org_id", orgId)
+    .order("full_name");
+  boom(error);
+  return (data ?? []) as Tenant[];
+}
+
+export async function getTenant(id: string): Promise<Tenant | null> {
+  const { data, error } = await supabase
+    .from("tenants")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  boom(error);
+  return (data as Tenant) ?? null;
+}
+
+export async function createTenant(
+  orgId: string,
+  values: Omit<Tenant, "id" | "org_id" | "status" | "notes"> & { notes?: string }
+): Promise<Tenant> {
+  const { data, error } = await supabase
+    .from("tenants")
+    .insert({ ...values, org_id: orgId })
+    .select("*")
+    .single();
+  boom(error);
+  return data as Tenant;
+}
+
+export async function updateTenant(id: string, values: Partial<Tenant>): Promise<void> {
+  const { error } = await supabase.from("tenants").update(values).eq("id", id);
+  boom(error);
+}
+
+export async function deleteTenant(id: string): Promise<void> {
+  const { error } = await supabase.from("tenants").delete().eq("id", id);
+  boom(error);
+}
+
+export async function getTenantPortalLink(tenantId: string): Promise<TenantUserLink | null> {
+  const { data, error } = await supabase
+    .from("tenant_users")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  boom(error);
+  return (data as TenantUserLink) ?? null;
+}
+
+export async function settleDeposit(
+  orgId: string,
+  tenant: Tenant,
+  deductions: { label: string; amount: number }[],
+  refund: number,
+  notes: string | null
+): Promise<DepositSettlement> {
+  const userId = (await supabase.auth.getUser()).data.user?.id ?? null;
+  const totalDeductions = deductions.reduce((s, d) => s + d.amount, 0);
+  const { data, error } = await supabase
+    .from("deposit_settlements")
+    .insert({
+      org_id: orgId,
+      tenant_id: tenant.id,
+      deposit_held: tenant.deposit_held,
+      deductions,
+      total_deductions: totalDeductions,
+      refund_amount: refund,
+      notes,
+      settled_by: userId,
+    })
+    .select("*")
+    .single();
+  boom(error);
+  await updateTenant(tenant.id, { status: "moved_out" });
+  return data as DepositSettlement;
+}
+
+export async function listSettlements(orgId: string): Promise<DepositSettlement[]> {
+  const { data, error } = await supabase
+    .from("deposit_settlements")
+    .select("*")
+    .eq("org_id", orgId)
+    .order("created_at", { ascending: false });
+  boom(error);
+  return (data ?? []) as DepositSettlement[];
+}
+
+// ---------------------------------------------------------------------------
+// Invoices
+// ---------------------------------------------------------------------------
+export async function listInvoices(orgId: string, month?: string): Promise<InvoiceWithRefs[]> {
+  let query = supabase
+    .from("invoices")
+    .select("*, tenant:tenants(id, full_name, phone), unit:units(label)")
+    .eq("org_id", orgId)
+    .order("due_date", { ascending: false });
+  if (month) query = query.eq("month", month);
+  const { data, error } = await query;
+  boom(error);
+  return (data ?? []) as unknown as InvoiceWithRefs[];
+}
+
+export async function listTenantInvoices(tenantId: string): Promise<InvoiceWithRefs[]> {
+  const { data, error } = await supabase
+    .from("invoices")
+    .select("*, unit:units(label)")
+    .eq("tenant_id", tenantId)
+    .order("month", { ascending: false });
+  boom(error);
+  return (data ?? []) as unknown as InvoiceWithRefs[];
+}
+
+export async function generateInvoices(orgId: string, month: string): Promise<number> {
+  const { data, error } = await supabase.rpc("generate_monthly_invoices", {
+    p_org: orgId,
+    p_month: month,
+  });
+  boom(error);
+  return (data as number) ?? 0;
+}
+
+export async function updateInvoice(id: string, values: Partial<Invoice>): Promise<void> {
+  const { error } = await supabase.from("invoices").update(values).eq("id", id);
+  boom(error);
+}
+
+// ---------------------------------------------------------------------------
+// Payments
+// ---------------------------------------------------------------------------
+export async function listPayments(orgId: string, tenantId?: string): Promise<PaymentWithRefs[]> {
+  let query = supabase
+    .from("payments")
+    .select("*, tenant:tenants(id, full_name)")
+    .eq("org_id", orgId)
+    .order("paid_at", { ascending: false })
+    .limit(500);
+  if (tenantId) query = query.eq("tenant_id", tenantId);
+  const { data, error } = await query;
+  boom(error);
+  return (data ?? []) as unknown as PaymentWithRefs[];
+}
+
+export async function listTenantPayments(tenantId: string): Promise<PaymentWithRefs[]> {
+  const { data, error } = await supabase
+    .from("payments")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .order("paid_at", { ascending: false });
+  boom(error);
+  return (data ?? []) as unknown as PaymentWithRefs[];
+}
+
+export async function recordManualPayment(args: {
+  orgId: string;
+  tenantId: string;
+  amount: number;
+  method: "mpesa_manual" | "cash" | "bank";
+  mpesaCode: string | null;
+  paidAt: string;
+  note: string | null;
+}): Promise<string> {
+  const { data, error } = await supabase.rpc("record_payment", {
+    p_org: args.orgId,
+    p_tenant: args.tenantId,
+    p_amount: args.amount,
+    p_method: args.method,
+    p_mpesa_code: args.mpesaCode,
+    p_paid_at: args.paidAt,
+    p_note: args.note,
+    p_recorded_by: (await supabase.auth.getUser()).data.user?.id ?? null,
+  });
+  boom(error);
+  return data as string;
+}
+
+export async function getPayment(id: string): Promise<PaymentWithRefs | null> {
+  const { data, error } = await supabase
+    .from("payments")
+    .select("*, tenant:tenants(id, full_name, phone, unit_id)")
+    .eq("id", id)
+    .maybeSingle();
+  boom(error);
+  return (data as unknown as PaymentWithRefs) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// M-Pesa STK (edge functions)
+// ---------------------------------------------------------------------------
+export async function stkInitiate(args: {
+  tenantId: string;
+  phone: string;
+  amount: number;
+}): Promise<{ checkoutRequestId: string }> {
+  const { data, error } = await supabase.functions.invoke("stk-initiate", {
+    body: args,
+  });
+  if (error) throw new Error(error.message);
+  return data as { checkoutRequestId: string };
+}
+
+export async function stkStatus(
+  checkoutRequestId: string
+): Promise<MpesaTransaction> {
+  const { data, error } = await supabase.functions.invoke("stk-status", {
+    body: { checkoutRequestId },
+  });
+  if (error) throw new Error(error.message);
+  return data as MpesaTransaction;
+}
+
+export async function listMpesaTransactions(orgId: string): Promise<MpesaTransaction[]> {
+  const { data, error } = await supabase
+    .from("mpesa_transactions")
+    .select("*")
+    .eq("org_id", orgId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  boom(error);
+  return (data ?? []) as MpesaTransaction[];
+}
+
+// ---------------------------------------------------------------------------
+// Org / settings
+// ---------------------------------------------------------------------------
+export async function updateOrg(id: string, values: Partial<Org>): Promise<void> {
+  const { error } = await supabase.from("orgs").update(values).eq("id", id);
+  boom(error);
+}
+
+export async function createOrg(name: string, planCode: string): Promise<Org> {
+  const userId = (await supabase.auth.getUser()).data.user?.id;
+  if (!userId) throw new Error("You must be signed in to create an organization.");
+  const { data: org, error } = await supabase
+    .from("orgs")
+    .insert({ name, plan_code: planCode, subscription_status: "trialing" })
+    .select("*")
+    .single();
+  boom(error);
+  const { error: mErr } = await supabase
+    .from("org_members")
+    .insert({ org_id: (org as Org).id, user_id: userId, role: "owner" });
+  boom(mErr);
+  return org as Org;
+}
+
+export interface InviteResult {
+  email: string;
+  tempPassword: string | null;
+  invited: boolean;
+}
+
+export async function inviteUser(args: {
+  email: string;
+  fullName: string;
+  phone: string;
+  kind: "tenant" | "manager";
+  tenantId?: string;
+}): Promise<InviteResult> {
+  const { data, error } = await supabase.functions.invoke("invite-user", {
+    body: args,
+  });
+  if (error) throw new Error(error.message);
+  return data as InviteResult;
+}
+
+export async function listStaff(orgId: string): Promise<{ user_id: string; role: string; name: string }[]> {
+  const { data, error } = await supabase
+    .from("org_members")
+    .select("user_id, role, profile:profiles(full_name)")
+    .eq("org_id", orgId);
+  boom(error);
+  return (data ?? []).map((r) => {
+    const row = r as unknown as { user_id: string; role: string; profile: { full_name: string }[] | null };
+    return { user_id: row.user_id, role: row.role, name: row.profile?.[0]?.full_name ?? "(no profile)" };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// M-Pesa credentials (via edge function; never direct DB access)
+// ---------------------------------------------------------------------------
+export interface MpesaCredsView {
+  configured: boolean;
+  environment: "sandbox" | "production";
+  shortcode: string;
+}
+
+export async function getMpesaCreds(): Promise<MpesaCredsView> {
+  const { data, error } = await supabase.functions.invoke("mpesa-credentials", {
+    body: { action: "get" },
+  });
+  if (error) throw new Error(error.message);
+  return data as MpesaCredsView;
+}
+
+export async function saveMpesaCreds(values: {
+  environment: "sandbox" | "production";
+  consumerKey: string;
+  consumerSecret: string;
+  shortcode: string;
+  passkey: string;
+}): Promise<void> {
+  const { error } = await supabase.functions.invoke("mpesa-credentials", {
+    body: { action: "save", ...values },
+  });
+  if (error) throw new Error(error.message);
+}
