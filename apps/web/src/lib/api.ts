@@ -310,21 +310,49 @@ export async function getPayment(id: string): Promise<PaymentWithRefs | null> {
 // ---------------------------------------------------------------------------
 // M-Pesa STK (edge functions)
 // ---------------------------------------------------------------------------
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Invoke an edge function with one retry. Cold starts and transient network
+ * blips surface as "Failed to send a request to the Edge Function" — a
+ * single retry a few seconds later almost always succeeds.
+ */
+async function invokeFn<T>(name: string, body: unknown, retries = 1): Promise<T> {
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt > 0) await sleep(2500);
+    try {
+      const { data, error } = await supabase.functions.invoke(name, { body });
+      if (error) {
+        // Function responded with an error payload — no point retrying 4xx.
+        throw new Error(error.message);
+      }
+      return data as T;
+    } catch (e) {
+      lastErr = e;
+      const msg = e instanceof Error ? e.message : String(e);
+      // Retry only network-level failures, not function logic errors.
+      if (!/failed to send a request|network|fetch|timeout|econn/i.test(msg)) throw e;
+    }
+  }
+  const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new Error(
+    `Could not reach the ${name} service (${msg}). Check your connection and try again.`
+  );
+}
+
 export async function stkInitiate(args: {
   tenantId: string;
   phone: string;
   amount: number;
 }): Promise<{ checkoutRequestId: string }> {
-  const { data, error } = await supabase.functions.invoke("stk-initiate", {
-    body: args,
-  });
-  if (error) throw new Error(error.message);
-  return data as { checkoutRequestId: string };
+  return invokeFn("stk-initiate", args);
 }
 
 export async function stkStatus(
   checkoutRequestId: string
 ): Promise<MpesaTransaction> {
+  // Poll path already retries on a timer — no extra retry here.
   const { data, error } = await supabase.functions.invoke("stk-status", {
     body: { checkoutRequestId },
   });
@@ -385,11 +413,7 @@ export async function inviteUser(args: {
   kind: "tenant" | "manager";
   tenantId?: string;
 }): Promise<InviteResult> {
-  const { data, error } = await supabase.functions.invoke("invite-user", {
-    body: args,
-  });
-  if (error) throw new Error(error.message);
-  return data as InviteResult;
+  return invokeFn("invite-user", args);
 }
 
 export async function listStaff(orgId: string): Promise<{ user_id: string; role: string; name: string }[]> {
@@ -414,11 +438,7 @@ export interface MpesaCredsView {
 }
 
 export async function getMpesaCreds(): Promise<MpesaCredsView> {
-  const { data, error } = await supabase.functions.invoke("mpesa-credentials", {
-    body: { action: "get" },
-  });
-  if (error) throw new Error(error.message);
-  return data as MpesaCredsView;
+  return invokeFn("mpesa-credentials", { action: "get" });
 }
 
 export async function saveMpesaCreds(values: {
@@ -428,8 +448,5 @@ export async function saveMpesaCreds(values: {
   shortcode: string;
   passkey: string;
 }): Promise<void> {
-  const { error } = await supabase.functions.invoke("mpesa-credentials", {
-    body: { action: "save", ...values },
-  });
-  if (error) throw new Error(error.message);
+  await invokeFn<unknown>("mpesa-credentials", { action: "save", ...values });
 }

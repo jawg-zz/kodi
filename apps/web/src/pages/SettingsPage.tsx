@@ -283,6 +283,11 @@ function DarajaSection() {
             ? <>Connected: {creds.environment} · shortcode {creds.shortcode} <Badge tone="green">configured</Badge></>
             : <>Not configured — STK Push is disabled until you save credentials. <Badge tone="amber">manual payments still work</Badge></>}
         </p>
+        {!loading && error && error.includes("Could not reach") && (
+          <div className="mb-3">
+            <Button variant="secondary" onClick={load}>Retry connection</Button>
+          </div>
+        )}
         <form onSubmit={save} className="grid max-w-lg gap-3">
           <Field label="Environment">
             <Select value={env} onChange={(e) => setEnv(e.target.value as "sandbox" | "production")}>
