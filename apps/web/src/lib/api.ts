@@ -317,7 +317,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * blips surface as "Failed to send a request to the Edge Function" — a
  * single retry a few seconds later almost always succeeds.
  */
-async function invokeFn<T>(name: string, body: unknown, retries = 1): Promise<T> {
+async function invokeFn<T>(
+  name: string,
+  body: Record<string, unknown>,
+  retries = 1
+): Promise<T> {
   let lastErr: unknown = null;
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (attempt > 0) await sleep(2500);
@@ -346,7 +350,7 @@ export async function stkInitiate(args: {
   phone: string;
   amount: number;
 }): Promise<{ checkoutRequestId: string }> {
-  return invokeFn("stk-initiate", args);
+  return invokeFn("stk-initiate", args as Record<string, unknown>);
 }
 
 export async function stkStatus(
@@ -413,7 +417,7 @@ export async function inviteUser(args: {
   kind: "tenant" | "manager";
   tenantId?: string;
 }): Promise<InviteResult> {
-  return invokeFn("invite-user", args);
+  return invokeFn("invite-user", args as Record<string, unknown>);
 }
 
 export async function listStaff(orgId: string): Promise<{ user_id: string; role: string; name: string }[]> {
