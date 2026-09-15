@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { PublicLayout } from "../components/Layout";
 import { Button } from "../components/Button";
@@ -9,10 +9,14 @@ import { Card, CardBody, ErrorBanner } from "../components/ui";
 export function LoginPage() {
   const { signIn } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showCheckEmail, setShowCheckEmail] = useState(
+    searchParams.get("check-email") === "1"
+  );
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,6 +36,27 @@ export function LoginPage() {
           <p className="mt-1 text-sm text-slate-500">
             Landlords, managers and tenants use the same sign in.
           </p>
+          {showCheckEmail && (
+            <div
+              className="mt-4 rounded-xl border border-brand-100 bg-brand-50 p-4 text-sm text-brand-700"
+              role="status"
+            >
+              <p className="font-medium">Account created — check your email</p>
+              <p className="mt-1">
+                We sent a confirmation link to your inbox. Click it, then sign
+                in here.
+              </p>
+              <button
+                onClick={() => {
+                  setShowCheckEmail(false);
+                  setSearchParams({}, { replace: true });
+                }}
+                className="mt-2 font-medium underline hover:no-underline"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           <form onSubmit={submit} className="mt-4 space-y-4">
             <Field label="Email" required>
               <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
@@ -85,7 +110,7 @@ export function SignupPage() {
       return;
     }
     if (needsConfirmation) {
-      navigate("/login", { replace: true });
+      navigate("/login?check-email=1", { replace: true });
     } else {
       navigate("/onboarding", { replace: true });
     }
