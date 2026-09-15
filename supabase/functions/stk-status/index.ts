@@ -126,17 +126,27 @@ Deno.serve(async (req) => {
         }
       }
     } else if (code === "1032") {
+      // User pressed "Cancel" on the handset — definitive failure.
       await sbFetch("mpesa_transactions", {
         method: "PATCH",
         params: { checkout_request_id: `eq.${tx.checkout_request_id}` },
         body: { status: "failed", result_code: 1032, result_desc: data.ResultDesc ?? null },
       });
-    } else if (code && code !== "1037" && code !== "9999") {
-      // Definitive failure codes. 1037/9999 mean "still pending / timeout unknown".
+    } else if (code === "1037") {
+      // Handset unreachable / DS timeout — no callback will arrive.
       await sbFetch("mpesa_transactions", {
         method: "PATCH",
         params: { checkout_request_id: `eq.${tx.checkout_request_id}` },
-        body: { status: "failed", result_code: Number(code) || null, result_desc: data.ResultDesc ?? null },
+        body: { status: "timeout", result_code: 1037, result_desc: data.ResultDesc ?? null },
+      });
+    } else if (code && code !== "0") {
+      // Anything else ("still under processing", 9999, empty) is NOT final.
+      // Keep pending so the UI keeps polling; the 30-min expiry sweeps dead
+      // rows and the callback records success. Surface Daraja's latest note.
+      await sbFetch("mpesa_transactions", {
+        method: "PATCH",
+        params: { checkout_request_id: `eq.${tx.checkout_request_id}` },
+        body: { result_code: Number(code) || null, result_desc: data.ResultDesc ?? null },
       });
     }
   } catch {
