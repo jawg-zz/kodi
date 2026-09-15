@@ -9,9 +9,11 @@ import {
   jsonResponse,
   resolveCaller,
   sbFetch,
-} from "../_shared/mod.ts";
+  handleOptions } from "../_shared/mod.ts";
 
 Deno.serve(async (req) => {
+  const preflight = handleOptions(req);
+  if (preflight) return preflight;
   if (req.method !== "POST") return errorResponse("Method not allowed", 405);
   const caller = await resolveCaller(req);
   if (caller instanceof Response) return caller;

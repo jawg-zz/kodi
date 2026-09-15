@@ -3,7 +3,7 @@
 // is an unguessable capability linking the callback to a pending row.
 // On success: record_payment() allocates FIFO and creates the ledger row.
 
-import { errorResponse, jsonResponse, sbFetch, sbRpc } from "../_shared/mod.ts";
+import { errorResponse, jsonResponse, sbFetch, sbRpc, handleOptions } from "../_shared/mod.ts";
 
 interface CallbackItem {
   Name: string;
@@ -18,6 +18,8 @@ interface StkCallback {
 }
 
 Deno.serve(async (req) => {
+  const preflight = handleOptions(req);
+  if (preflight) return preflight;
   if (req.method !== "POST") return errorResponse("Method not allowed", 405);
   let body: { Body?: { stkCallback?: StkCallback } };
   try {

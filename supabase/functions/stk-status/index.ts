@@ -12,7 +12,7 @@ import {
   sbFetch,
   sbRpc,
   stkPassword,
-} from "../_shared/mod.ts";
+  handleOptions } from "../_shared/mod.ts";
 
 async function darajaToken(base: string, key: string, secret: string): Promise<string> {
   const res = await fetch(
@@ -26,6 +26,8 @@ async function darajaToken(base: string, key: string, secret: string): Promise<s
 }
 
 Deno.serve(async (req) => {
+  const preflight = handleOptions(req);
+  if (preflight) return preflight;
   if (req.method !== "POST") return errorResponse("Method not allowed", 405);
   const caller = await resolveCaller(req);
   if (caller instanceof Response) return caller;

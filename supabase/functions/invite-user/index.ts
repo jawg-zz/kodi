@@ -2,7 +2,7 @@
 // and links it to the caller's org. Uses the service_role key; never expose
 // admin credentials to the browser.
 
-import { errorResponse, jsonResponse, resolveCaller, sbFetch } from "../_shared/mod.ts";
+import { errorResponse, jsonResponse, resolveCaller, sbFetch, handleOptions } from "../_shared/mod.ts";
 
 function randomPassword(length = 16): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%";
@@ -23,6 +23,8 @@ function inviteAllowed(orgId: string): boolean {
 }
 
 Deno.serve(async (req) => {
+  const preflight = handleOptions(req);
+  if (preflight) return preflight;
   if (req.method !== "POST") return errorResponse("Method not allowed", 405);
   const caller = await resolveCaller(req);
   if (caller instanceof Response) return caller;
