@@ -373,15 +373,15 @@ export async function inviteUser(args: {
 }
 
 export async function listStaff(orgId: string): Promise<{ user_id: string; role: string; name: string }[]> {
-  const { data, error } = await supabase
-    .from("org_members")
-    .select("user_id, role, profile:profiles(full_name)")
-    .eq("org_id", orgId);
-  boom(error);
-  return (data ?? []).map((r) => {
-    const row = r as unknown as { user_id: string; role: string; profile: { full_name: string }[] | null };
-    return { user_id: row.user_id, role: row.role, name: row.profile?.[0]?.full_name ?? "(no profile)" };
+  const { data, error } = await supabase.rpc("list_staff_members", {
+    p_org: orgId,
   });
+  boom(error);
+  return ((data ?? []) as { user_id: string; role: string; full_name: string }[]).map((r) => ({
+    user_id: r.user_id,
+    role: r.role,
+    name: r.full_name || "(no profile)",
+  }));
 }
 
 // ---------------------------------------------------------------------------

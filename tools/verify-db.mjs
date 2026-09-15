@@ -294,6 +294,24 @@ async function main() {
     await expectError("onboarding requires sign-in", () =>
       q("select create_org_with_owner('NoAuth')"), "signed in");
 
+    // --- staff listing: replaces the client-side org_members→profiles join --
+    await asUser(userA);
+    const staff1 = (await q("select * from list_staff_members($1)", [org1])).rows;
+    check("list_staff_members returns owner", staff1.length === 1 && staff1[0].role === "owner",
+      JSON.stringify(staff1));
+    await q("insert into profiles (id, full_name) values ($1,'Landlord One') on conflict (id) do update set full_name=excluded.full_name",
+      [userA]);
+    const staffNamed = (await q("select * from list_staff_members($1)", [org1])).rows;
+    check("staff listing resolves profile name", staffNamed[0]?.full_name === "Landlord One",
+      JSON.stringify(staffNamed));
+    const otherStaff = (await q("select * from list_staff_members($1)", [org2])).rows;
+    check("staff listing for another org returns nothing", otherStaff.length === 0,
+      JSON.stringify(otherStaff));
+    await asUser(userT);
+    const tenantStaff = (await q("select * from list_staff_members($1)", [org1])).rows;
+    check("tenant cannot list staff", tenantStaff.length === 0,
+      JSON.stringify(tenantStaff));
+
     await asSuper();
   } finally {
     await client.end().catch(() => {});
