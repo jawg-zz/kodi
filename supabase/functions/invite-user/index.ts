@@ -4,10 +4,22 @@
 
 import { errorResponse, jsonResponse, resolveCaller, sbFetch } from "../_shared/mod.ts";
 
-function randomPassword(length = 12): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+function randomPassword(length = 16): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%";
   const bytes = crypto.getRandomValues(new Uint8Array(length));
   return Array.from(bytes, (b) => chars[b % chars.length]).join("");
+}
+
+// Simple per-org invite throttle: max 20 invites per hour (abuse guard).
+const inviteHits = new Map<string, number[]>();
+function inviteAllowed(orgId: string): boolean {
+  const now = Date.now();
+  const windowStart = now - 3600_000;
+  const hits = (inviteHits.get(orgId) ?? []).filter((t) => t > windowStart);
+  if (hits.length >= 20) return false;
+  hits.push(now);
+  inviteHits.set(orgId, hits);
+  return true;
 }
 
 Deno.serve(async (req) => {
@@ -16,6 +28,9 @@ Deno.serve(async (req) => {
   if (caller instanceof Response) return caller;
   if (caller.role !== "owner" && caller.role !== "manager") {
     return errorResponse("Only staff can invite users", 403);
+  }
+  if (!inviteAllowed(caller.orgId)) {
+    return errorResponse("Too many invites — try again later", 429);
   }
 
   let body: {
@@ -76,12 +91,29 @@ Deno.serve(async (req) => {
     userId = ((await created.json()) as { id: string }).id;
   }
 
-  // Profile row.
-  await sbFetch("profiles", {
-    method: "POST",
-    params: {},
-    body: { id: userId, full_name: fullName, phone },
+  // Profile row: create if missing, otherwise fill blanks only.
+  const existing = await sbFetch("profiles", {
+    params: { id: `eq.${userId}`, select: "id,full_name,phone" },
   });
+  const rows = ((existing.data ?? []) as { id: string; full_name: string; phone: string | null }[]);
+  if (rows.length === 0) {
+    await sbFetch("profiles", {
+      method: "POST",
+      params: {},
+      body: { id: userId, full_name: fullName, phone },
+    });
+  } else {
+    const patch: Record<string, string> = {};
+    if (!rows[0].full_name && fullName) patch.full_name = fullName;
+    if (!rows[0].phone && phone) patch.phone = phone;
+    if (Object.keys(patch).length > 0) {
+      await sbFetch("profiles", {
+        method: "PATCH",
+        params: { id: `eq.${userId}` },
+        body: patch,
+      });
+    }
+  }
 
   if (kind === "manager") {
     const m = await sbFetch("org_members", {
@@ -98,6 +130,12 @@ Deno.serve(async (req) => {
     });
     if (!t.ok || ((t.data ?? []) as unknown[]).length === 0) {
       return errorResponse("Tenant not found in your organization", 404);
+    }
+    const already = await sbFetch("tenant_users", {
+      params: { tenant_id: `eq.${tenantId}`, select: "tenant_id" },
+    });
+    if (!already.ok || ((already.data ?? []) as unknown[]).length > 0) {
+      return errorResponse("This tenant already has a portal login", 409);
     }
     const link = await sbFetch("tenant_users", {
       method: "POST",

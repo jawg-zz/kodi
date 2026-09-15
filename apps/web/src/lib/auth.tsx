@@ -89,14 +89,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    let alive = true;
     supabase.auth.getSession().then(async ({ data }) => {
+      if (!alive) return;
       setSession(data.session);
       if (data.session?.user) await loadUserData(data.session.user.id);
-      setLoading(false);
+      if (alive) setLoading(false);
     });
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      if (!alive) return;
       setSession(newSession);
       if (newSession?.user) void loadUserData(newSession.user.id);
       else {
@@ -106,7 +109,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setTenant(null);
       }
     });
-    return () => subscription.unsubscribe();
+    return () => {
+      alive = false;
+      subscription.unsubscribe();
+    };
   }, [loadUserData]);
 
   const signIn = useCallback(async (email: string, password: string) => {
@@ -127,10 +133,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       if (error) return { error: error.message, needsConfirmation: false };
       if (data.user) {
-        await supabase
-          .from("profiles")
-          .upsert({ id: data.user.id, full_name: fullName, phone });
-        await loadUserData(data.user.id);
+        // Best-effort: RLS may hide the profiles row until a session exists.
+        try {
+          await supabase
+            .from("profiles")
+            .upsert({ id: data.user.id, full_name: fullName, phone });
+        } catch {
+          // create_org_with_owner backfills the profile at onboarding.
+        }
+        try {
+          await loadUserData(data.user.id);
+        } catch {
+          // Tables are unreadable pre-confirmation; onboarding reloads.
+        }
       }
       // If email confirmation is on, session is null until they confirm.
       return { error: null, needsConfirmation: !data.session };

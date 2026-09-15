@@ -13,8 +13,28 @@ import type {
   UnitWithTenant,
 } from "./types";
 
-function boom(error: { message: string } | null): void {
-  if (error) throw new Error(error.message);
+function friendlyDbError(error: { message: string; code?: string }): never {
+  const msg = error.message;
+  if (error.code === "23505" || msg.includes("duplicate key")) {
+    if (msg.includes("tenants") || msg.includes("idx_tenants_org_phone")) {
+      throw new Error("A tenant with this phone number already exists in your business.");
+    }
+    if (msg.includes("units")) {
+      throw new Error("A unit with this label already exists in this property.");
+    }
+    if (msg.includes("tenant_users")) {
+      throw new Error("This tenant already has a portal login.");
+    }
+    throw new Error("This record already exists.");
+  }
+  if (msg.includes("Unit limit reached")) {
+    throw new Error(msg);
+  }
+  throw new Error(msg);
+}
+
+function boom(error: { message: string; code?: string } | null): void {
+  if (error) friendlyDbError(error);
 }
 
 // ---------------------------------------------------------------------------

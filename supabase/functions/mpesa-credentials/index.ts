@@ -18,7 +18,6 @@ Deno.serve(async (req) => {
   if (caller.role !== "owner" && caller.role !== "manager") {
     return errorResponse("Only staff can manage M-Pesa credentials", 403);
   }
-
   let body: { action?: string } & Record<string, string>;
   try {
     body = await req.json();
@@ -42,7 +41,9 @@ Deno.serve(async (req) => {
   }
 
   if (body.action === "save") {
-    const environment = body.environment === "production" ? "production" : "sandbox";
+    if (caller.role !== "owner") {
+      return errorResponse("Only the business owner can update M-Pesa credentials", 403);
+    }    const environment = body.environment === "production" ? "production" : "sandbox";
     const consumerKey = (body.consumerKey ?? "").trim();
     const consumerSecret = (body.consumerSecret ?? "").trim();
     const shortcode = (body.shortcode ?? "").trim();

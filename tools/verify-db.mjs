@@ -312,6 +312,39 @@ async function main() {
     check("tenant cannot list staff", tenantStaff.length === 0,
       JSON.stringify(tenantStaff));
 
+    // --- audit batch 1 --------------------------------------------------------
+    // G1: server-side unit limit (starter = 10).
+    await asUser(userA);
+    const starterProp = (await q("select id from properties where org_id=$1 limit 1", [org1])).rows[0].id;
+    let limitHit = false;
+    for (let i = 0; i < 12; i++) {
+      try {
+        await q("insert into units (org_id, property_id, label, rent_amount) values ($1,$2,$3,1000)",
+          [org1, starterProp, `LIMIT-${i}`]);
+      } catch (e) {
+        if (String(e.message).includes("Unit limit reached")) limitHit = true;
+        else throw e;
+      }
+    }
+    const unitCount = (await q("select count(*)::int as n from units where org_id=$1", [org1])).rows[0].n;
+    check("unit limit enforced server-side (max 10)", limitHit && unitCount === 10,
+      `hit=${limitHit} count=${unitCount}`);
+
+    // G2: mpesa_credentials is deny-all for clients (service-role functions
+    // own it; the edge function additionally restricts save to owners).
+    await expectError("members cannot write credentials directly", async () => {
+      await asUser(userA);
+      await q("insert into mpesa_credentials (org_id, shortcode) values ($1,'12345')", [org1]);
+    }, "row-level security");
+    const credRead = await q("select count(*)::int as n from mpesa_credentials");
+    check("credentials hidden from clients entirely", credRead.rows[0].n === 0,
+      String(credRead.rows[0].n));
+
+    // G3: duplicate tenant phone rejected per org.
+    await expectError("duplicate tenant phone rejected", () =>
+      q("insert into tenants (org_id, full_name, phone) values ($1,'Jane Clone','0712345678')", [org1]),
+      "duplicate key");
+
     await asSuper();
   } finally {
     await client.end().catch(() => {});
