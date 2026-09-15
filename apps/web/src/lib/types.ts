@@ -113,6 +113,7 @@ export interface MpesaTransaction {
   result_desc: string | null;
   mpesa_receipt: string | null;
   payment_id: string | null;
+  created_at: string;
 }
 
 export interface DepositSettlement {

@@ -61,7 +61,14 @@ Deno.serve(async (req) => {
   if (caller.role === "tenant" && caller.tenantId !== tx.tenant_id) {
     return errorResponse("Transaction not found", 404);
   }
-  if (tx.status !== "pending") return jsonResponse(tx);
+  // Sweep stale pendings on every poll so the UI stops watching dead rows.
+  await sbRpc("expire_pending_transactions", {});
+  if (tx.status !== "pending") {
+    const refetch = await sbFetch("mpesa_transactions", {
+      params: { checkout_request_id: `eq.${body.checkoutRequestId}`, select: "*" },
+    });
+    return jsonResponse((((refetch.data ?? []) as unknown[])[0] ?? tx) as unknown);
+  }
 
   const c = await sbFetch("mpesa_credentials", {
     params: { org_id: `eq.${caller.orgId}`, select: "environment,consumer_key_enc,consumer_secret_enc,shortcode,passkey_enc" },

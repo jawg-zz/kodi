@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { currentMonthKey, formatKES, monthLabel, parseKES } from "@kodi/shared";
+import { currentMonthKey, formatKES, monthLabel, normalizeMpesaCode, parseKES } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import {
   generateInvoices,
@@ -296,7 +296,8 @@ export function RecordPaymentModal({ orgId, tenantId, tenantName, suggested, onC
     e.preventDefault();
     const value = parseKES(amount);
     if (value === null || value < 1) { setError("Enter a valid amount in KES."); return; }
-    if (method === "mpesa_manual" && !/^[A-Za-z0-9]{8,12}$/.test(mpesaCode.trim())) {
+    const code = normalizeMpesaCode(mpesaCode);
+    if (method === "mpesa_manual" && !code) {
       setError("Enter the M-Pesa transaction code from the confirmation SMS (e.g. SLJ7XK2M9P).");
       return;
     }
@@ -308,14 +309,18 @@ export function RecordPaymentModal({ orgId, tenantId, tenantName, suggested, onC
         tenantId,
         amount: value,
         method,
-        mpesaCode: method === "mpesa_manual" ? mpesaCode.trim().toUpperCase() : null,
+        mpesaCode: method === "mpesa_manual" ? code : null,
         paidAt: new Date(paidAt || Date.now()).toISOString(),
         note: note.trim() || null,
       });
       await onRecorded();
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      // Unique-index hit means this SMS code was already recorded.
+      setError(/already exists|duplicate/i.test(msg)
+        ? "This M-Pesa code was already recorded. Check Payments before retrying."
+        : msg);
     } finally {
       setBusy(false);
     }

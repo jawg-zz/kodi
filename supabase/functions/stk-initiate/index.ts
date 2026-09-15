@@ -32,7 +32,7 @@ Deno.serve(async (req) => {
   const caller = await resolveCaller(req);
   if (caller instanceof Response) return caller;
 
-  let body: { tenantId?: string; phone?: string; amount?: number };
+  let body: { tenantId?: string; phone?: string; amount?: number; idempotencyKey?: string };
   try {
     body = await req.json();
   } catch {
@@ -42,9 +42,11 @@ Deno.serve(async (req) => {
   const tenantId = body.tenantId ?? "";
   const phone = normalizePhone(body.phone ?? "");
   const amount = Math.round(Number(body.amount));
+  const idempotencyKey = (body.idempotencyKey ?? "").slice(0, 128) || null;
   if (!tenantId) return errorResponse("tenantId is required");
   if (!phone) return errorResponse("A valid Safaricom number is required");
   if (!Number.isFinite(amount) || amount < 1) return errorResponse("Amount must be at least KES 1");
+  if (amount > 500000) return errorResponse("Amount looks too large — please confirm and try again (max KES 500,000 per push)", 422);
 
   // Tenants may only pay for themselves.
   if (caller.role === "tenant" && caller.tenantId !== tenantId) {
@@ -83,6 +85,23 @@ Deno.serve(async (req) => {
     ]);
   } catch {
     return errorResponse("Could not decrypt M-Pesa credentials — check CREDENTIALS_KEY", 500);
+  }
+
+  // Idempotency: a retried/double-tapped initiate within the same window
+  // returns the existing pending row instead of sending a second STK push.
+  if (idempotencyKey) {
+    const dup = await sbFetch("mpesa_transactions", {
+      params: {
+        org_id: `eq.${caller.orgId}`,
+        idempotency_key: `eq.${idempotencyKey}`,
+        status: "eq.pending",
+        select: "checkout_request_id",
+      },
+    });
+    const existing = ((dup.data ?? []) as { checkout_request_id: string }[])[0];
+    if (existing?.checkout_request_id) {
+      return jsonResponse({ checkoutRequestId: existing.checkout_request_id, deduplicated: true });
+    }
   }
 
   const base = darajaBase(creds.environment);
@@ -128,6 +147,7 @@ Deno.serve(async (req) => {
         amount,
         status: "pending",
         initiated_by: caller.userId,
+        idempotency_key: idempotencyKey,
       },
     });
 

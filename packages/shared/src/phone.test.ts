@@ -4,6 +4,7 @@ import {
   isValidKenyanPhone,
   maskPhone,
   normalizeKenyanPhone,
+  normalizeMpesaCode,
 } from "./phone";
 
 describe("normalizeKenyanPhone", () => {
@@ -47,5 +48,24 @@ describe("display helpers", () => {
   it("returns input unchanged when unparseable", () => {
     expect(formatPhoneLocal("n/a")).toBe("n/a");
     expect(maskPhone("n/a")).toBe("n/a");
+  });
+});
+
+describe("normalizeMpesaCode", () => {
+  it("accepts classic 10-char codes", () => {
+    expect(normalizeMpesaCode("SLJ7XK2M9P")).toBe("SLJ7XK2M9P");
+  });
+  it("uppercases and strips spaces/dashes", () => {
+    expect(normalizeMpesaCode(" slj7-xk2m9p ")).toBe("SLJ7XK2M9P");
+  });
+  it("accepts 6–16 chars", () => {
+    expect(normalizeMpesaCode("ABC123")).toBe("ABC123");
+    expect(normalizeMpesaCode("A".repeat(16))).toBe("A".repeat(16));
+  });
+  it("rejects too short, too long, symbols", () => {
+    expect(normalizeMpesaCode("AB12")).toBeNull();
+    expect(normalizeMpesaCode("A".repeat(17))).toBeNull();
+    expect(normalizeMpesaCode("SLJ7!K2M9P")).toBeNull();
+    expect(normalizeMpesaCode("")).toBeNull();
   });
 });

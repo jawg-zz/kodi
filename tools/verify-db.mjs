@@ -345,6 +345,30 @@ async function main() {
       q("insert into tenants (org_id, full_name, phone) values ($1,'Jane Clone','0712345678')", [org1]),
       "duplicate key");
 
+    // --- M-Pesa flow hardening ------------------------------------------------
+    const idemCol = (await q(
+      "select count(*)::int as n from information_schema.columns where table_schema='public' and table_name='mpesa_transactions' and column_name='idempotency_key'")).rows[0].n;
+    check("mpesa idempotency_key column exists", idemCol === 1, String(idemCol));
+    await asSuper();
+    const txA = (await q(
+      "insert into mpesa_transactions (org_id, tenant_id, checkout_request_id, phone, amount, idempotency_key) values ($1,$2,'IDEM-1','254712345678',1000,'k1') returning id",
+      [org1, t1])).rows[0].id;
+    check("idempotent tx insert works", !!txA, String(txA));
+    await expectError("duplicate idempotency key rejected", () =>
+      q("insert into mpesa_transactions (org_id, tenant_id, checkout_request_id, phone, amount, idempotency_key) values ($1,$2,'IDEM-2','254712345678',1000,'k1')",
+        [org1, t1]), "duplicate key");
+    // stale pending expiry
+    await q("update mpesa_transactions set created_at = now() - interval '31 minutes' where id=$1", [txA]);
+    const expired = (await q("select expire_pending_transactions() as n")).rows[0].n;
+    check("expire_pending_transactions sweeps stale row", expired === 1, String(expired));
+    const txStatus = (await q("select status from mpesa_transactions where id=$1", [txA])).rows[0].status;
+    check("stale pending marked timeout", txStatus === "timeout", txStatus);
+    // duplicate manual codes rejected
+    await q("select record_payment($1,$2,$3,'mpesa_manual','DUPECODE123')", [org1, t1, 500]);
+    await expectError("duplicate manual mpesa code rejected", () =>
+      q("select record_payment($1,$2,$3,'mpesa_manual','DUPECODE123')", [org1, t1, 500]),
+      "duplicate key");
+
     await asSuper();
   } finally {
     await client.end().catch(() => {});

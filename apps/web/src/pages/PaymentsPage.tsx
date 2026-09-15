@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { formatDateTime } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import { getPayment, listPayments, listTenants, recordManualPayment } from "../lib/api";
-import { parseKES } from "@kodi/shared";
+import { parseKES, normalizeMpesaCode } from "@kodi/shared";
 import type { PaymentWithRefs, Tenant } from "../lib/types";
 import { Button } from "../components/Button";
 import { Field, Input, Select } from "../components/Field";
@@ -161,7 +161,8 @@ function RecordAnyPaymentModal({ orgId, tenants, onClose, onRecorded }: {
     const value = parseKES(amount);
     if (!tenantId) { setError("Choose a tenant."); return; }
     if (value === null || value < 1) { setError("Enter a valid amount in KES."); return; }
-    if (method === "mpesa_manual" && !/^[A-Za-z0-9]{8,12}$/.test(mpesaCode.trim())) {
+    const code = normalizeMpesaCode(mpesaCode);
+    if (method === "mpesa_manual" && !code) {
       setError("Enter the M-Pesa transaction code from the confirmation SMS (e.g. SLJ7XK2M9P).");
       return;
     }
@@ -173,14 +174,17 @@ function RecordAnyPaymentModal({ orgId, tenants, onClose, onRecorded }: {
         tenantId,
         amount: value,
         method,
-        mpesaCode: method === "mpesa_manual" ? mpesaCode.trim().toUpperCase() : null,
+        mpesaCode: method === "mpesa_manual" ? code : null,
         paidAt: new Date(paidAt || Date.now()).toISOString(),
         note: note.trim() || null,
       });
       await onRecorded();
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(/already exists|duplicate/i.test(msg)
+        ? "This M-Pesa code was already recorded. Check Payments before retrying."
+        : msg);
     } finally {
       setBusy(false);
     }

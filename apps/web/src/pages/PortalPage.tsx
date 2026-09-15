@@ -46,11 +46,21 @@ export function PortalPage() {
 
   useEffect(() => {
     if (!tx || tx.status !== "pending") return;
+    let polls = 0;
     const timer = setInterval(async () => {
+      polls += 1;
       try {
         const latest = await stkStatus(tx.checkout_request_id);
         setTx(latest);
-        if (latest.status === "success") void load();
+        if (latest.status === "success") {
+          clearInterval(timer);
+          void load();
+        } else if (latest.status === "failed" || latest.status === "timeout") {
+          clearInterval(timer);
+        } else if (polls >= 45) {
+          // 3 minutes: handset prompt long expired; stop polling, keep state.
+          clearInterval(timer);
+        }
       } catch {
         // keep polling
       }

@@ -349,8 +349,20 @@ export async function stkInitiate(args: {
   tenantId: string;
   phone: string;
   amount: number;
-}): Promise<{ checkoutRequestId: string }> {
+  idempotencyKey?: string;
+}): Promise<{ checkoutRequestId: string; deduplicated?: boolean }> {
   return invokeFn("stk-initiate", args as Record<string, unknown>);
+}
+
+export async function listTenantMpesaAttempts(tenantId: string): Promise<MpesaTransaction[]> {
+  const { data, error } = await supabase
+    .from("mpesa_transactions")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .order("created_at", { ascending: false })
+    .limit(10);
+  boom(error);
+  return (data ?? []) as MpesaTransaction[];
 }
 
 export async function stkStatus(

@@ -37,3 +37,13 @@ export function maskPhone(phone: string): string {
   const local = n.slice(3);
   return `0${local.slice(0, 3)} *** ${local.slice(6)}`;
 }
+
+/**
+ * M-Pesa transaction codes: 8–12 alphanumerics in practice, but newer codes
+ * vary — accept 6–16 and let the server-side unique index catch duplicates.
+ */
+export function normalizeMpesaCode(input: string): string | null {
+  const code = input.trim().toUpperCase().replace(/[\s-]/g, "");
+  if (!/^[A-Z0-9]{6,16}$/.test(code)) return null;
+  return code;
+}

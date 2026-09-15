@@ -28,7 +28,10 @@ Deno.serve(async (req) => {
     return errorResponse("Invalid JSON body");
   }
   const cb = body.Body?.stkCallback;
-  if (!cb?.CheckoutRequestID) return errorResponse("Missing CheckoutRequestID");
+  if (!cb?.CheckoutRequestID || typeof cb.CheckoutRequestID !== "string") {
+    return errorResponse("Missing CheckoutRequestID");
+  }
+  if (cb.CheckoutRequestID.length > 128) return errorResponse("Bad CheckoutRequestID");
 
   const txRes = await sbFetch("mpesa_transactions", {
     params: { checkout_request_id: `eq.${cb.CheckoutRequestID}`, select: "*" },
