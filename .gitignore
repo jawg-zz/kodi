@@ -14,3 +14,4 @@ supabase/.temp
 tools/.pgdata/
 
 .vercel
+tools/.fn*.json
