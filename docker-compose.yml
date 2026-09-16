@@ -1,0 +1,14 @@
+# Kodi on Dokploy (compose service, source: repo ./docker-compose.yml).
+# The web image is built server-side by Dokploy; VITE_* values come from
+# build args set in the Dokploy dashboard (mirrored from env below).
+name: kodi
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:?VITE_SUPABASE_URL is required}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:?VITE_SUPABASE_ANON_KEY is required}
+    restart: unless-stopped

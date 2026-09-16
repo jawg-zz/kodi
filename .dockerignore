@@ -1,0 +1,8 @@
+node_modules
+apps/web/node_modules
+apps/web/dist
+packages/shared/node_modules
+.git
+gui-test-screenshots
+tools/.pgdata
+supabase/.temp
