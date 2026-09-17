@@ -264,8 +264,9 @@ export function TenantDetailPage() {
           onSaved={load}
         />
       )}
-      {showSettle && (
+      {showSettle && tenant && (
         <SettleDepositModal
+          outstanding={invoices.reduce((sum, i) => sum + i.balance, 0)}
           orgId={org!.id}
           tenant={tenant}
           onClose={() => setShowSettle(false)}
@@ -367,9 +368,10 @@ export function RecordPaymentModal({ orgId, tenantId, tenantName, suggested, onC
   );
 }
 
-export function SettleDepositModal({ orgId, tenant, onClose, onSettled }: {
+export function SettleDepositModal({ orgId, tenant, outstanding, onClose, onSettled }: {
   orgId: string;
   tenant: Tenant;
+  outstanding: number;
   onClose: () => void;
   onSettled: () => void;
 }) {
@@ -410,6 +412,13 @@ export function SettleDepositModal({ orgId, tenant, onClose, onSettled }: {
           Deposit held: <Money value={tenant.deposit_held} className="font-semibold" />.
           Move the tenant out and record deductions; the balance is refunded to the tenant.
         </p>
+        {outstanding > 0 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            Unpaid invoices: <Money value={outstanding} className="font-semibold" />. Consider
+            adding an “Unpaid balance” deduction line below so the arrears are not written off
+            with the refund.
+          </div>
+        )}
         {lines.map((l, i) => (
           <div key={i} className="grid grid-cols-[1fr_160px_auto] gap-2">
             <Input value={l.label} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} placeholder="e.g. Repairs, Unpaid balance, Cleaning" />

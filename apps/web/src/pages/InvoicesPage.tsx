@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { addMonths, currentMonthKey, monthLabel } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
-import { generateInvoices, listInvoices, listTenants } from "../lib/api";
+import { generateInvoices, listInvoices, listTenants, updateInvoice } from "../lib/api";
 import type { InvoiceWithRefs, Tenant } from "../lib/types";
 import { Button } from "../components/Button";
-import { Field, Select } from "../components/Field";
+import { Field, Input, Select } from "../components/Field";
 import { Card, EmptyState, ErrorBanner, Loading, PageHeader } from "../components/ui";
+import { Modal } from "../components/Modal";
 import { InvoiceStatusBadge, LinesBreakdown, Money } from "../components/domain";
 
 export function InvoicesPage() {
@@ -19,6 +20,7 @@ export function InvoicesPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [editing, setEditing] = useState<InvoiceWithRefs | null>(null);
 
   const load = async () => {
     if (!org) return;
@@ -144,6 +146,11 @@ export function InvoicesPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <InvoiceStatusBadge status={i.status} />
+                        {i.balance > 0 && (
+                          <button onClick={() => setEditing(i)} className="text-xs font-medium text-brand-600 hover:underline">
+                            Edit
+                          </button>
+                        )}
                         <Link to={`/print/invoice/${i.id}`} target="_blank" rel="noreferrer" className="text-xs font-medium text-brand-600 hover:underline">
                           Print
                         </Link>
@@ -156,6 +163,69 @@ export function InvoicesPage() {
           </div>
         </Card>
       )}
+
+      {editing && (
+        <EditInvoiceModal
+          invoice={editing}
+          tenantName={tenantName(editing.tenant_id)}
+          onClose={() => setEditing(null)}
+          onSaved={async () => { setEditing(null); await load(); }}
+        />
+      )}
     </div>
+  );
+}
+export function EditInvoiceModal({ invoice, tenantName, onClose, onSaved }: {
+  invoice: InvoiceWithRefs;
+  tenantName: string;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [dueDate, setDueDate] = useState(invoice.due_date);
+  const [notes, setNotes] = useState(invoice.notes ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+      setError('Due date must be YYYY-MM-DD.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      // Totals stay system-computed; only the due date and notes are editable
+      // so payments already allocated against this invoice keep adding up.
+      await updateInvoice(invoice.id, { due_date: dueDate, notes: notes.trim() || null });
+      await onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={'Edit invoice — ' + tenantName + ' (' + invoice.month + ')'} onClose={onClose}>
+      <form onSubmit={save} className="space-y-4">
+        <p className="text-sm text-slate-600">
+          Total <Money value={invoice.total} className="font-semibold" /> ·{' '}
+          Balance <Money value={invoice.balance} className="font-semibold" /> — amounts are
+          computed from payments and cannot be edited here.
+        </p>
+        <Field label="Due date" required>
+          <Input value={dueDate} onChange={(e) => setDueDate(e.target.value)} placeholder="YYYY-MM-DD" />
+        </Field>
+        <Field label="Notes">
+          <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Correction reason…" />
+        </Field>
+        {error && <ErrorBanner message={error} />}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
