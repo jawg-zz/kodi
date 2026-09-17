@@ -22,6 +22,9 @@ function friendlyDbError(error: { message: string; code?: string }): never {
     if (msg.includes("units")) {
       throw new Error("A unit with this label already exists in this property.");
     }
+    if (msg.includes("uq_tenants_unit_active")) {
+      throw new Error("That unit already has an active tenant. Move them out first, or pick a vacant unit.");
+    }
     if (msg.includes("tenant_users")) {
       throw new Error("This tenant already has a portal login.");
     }

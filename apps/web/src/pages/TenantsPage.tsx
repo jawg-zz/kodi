@@ -238,11 +238,14 @@ export function TenantModal({ orgId, tenant, units, onClose, onSaved }: {
           <Field label="Unit">
             <Select value={unitId} onChange={(e) => setUnitId(e.target.value)}>
               <option value="">— Unassigned —</option>
-              {units.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.label} ({formatKES(u.rent_amount)}){u.status !== "vacant" && u.current_tenant_id !== tenant?.id ? " — occupied" : ""}
-                </option>
-              ))}
+              {units.map((u) => {
+                const taken = u.status !== 'vacant' && u.current_tenant_id !== tenant?.id;
+                return (
+                  <option key={u.id} value={u.id} disabled={taken}>
+                    {u.label} ({formatKES(u.rent_amount)}){taken ? ' — occupied' : ''}
+                  </option>
+                );
+              })}
             </Select>
           </Field>
         </div>

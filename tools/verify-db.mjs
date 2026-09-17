@@ -330,6 +330,17 @@ async function main() {
     check("unit limit enforced server-side (max 10)", limitHit && unitCount === 10,
       `hit=${limitHit} count=${unitCount}`);
 
+    // G1b: one active tenant per unit (trigger + partial unique index, org2 context).
+    await asUser(userB);
+    const dblUnit = (await q("insert into units (org_id, property_id, label, rent_amount) values ($1,$2,'DBL-1',1000) returning id", [org2, prop2])).rows[0].id;
+    await q("insert into tenants (org_id, unit_id, full_name, phone, status) values ($1,$2,'First Occupant','254700000001','active')", [org2, dblUnit]);
+    await expectError('second active tenant in same unit rejected', async () => {
+      await q("insert into tenants (org_id, unit_id, full_name, phone, status) values ($1,$2,'Second Occupant','254700000002','active')", [org2, dblUnit]);
+    }, 'That unit already has an active tenant');
+    await q("update tenants set status='moved_out' where phone='254700000001'");
+    await q("insert into tenants (org_id, unit_id, full_name, phone, status) values ($1,$2,'Replacement','254700000003','active')", [org2, dblUnit]);
+    const occCount = (await q("select count(*)::int as n from tenants where unit_id=$1 and status in ('active','notice')", [dblUnit])).rows[0].n;
+    check('replacement after move-out allowed', occCount === 1, String(occCount));
     // G2: mpesa_credentials is deny-all for clients (service-role functions
     // own it; the edge function additionally restricts save to owners).
     await expectError("members cannot write credentials directly", async () => {
