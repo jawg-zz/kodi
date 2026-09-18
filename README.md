@@ -33,17 +33,20 @@ kodi/
 
 ## 1. Database
 
-Apply the migrations to your Supabase project (SQL editor or CLI):
+Apply the migrations to your Supabase project (SQL editor or CLI), in
+filename order — they chain (single-occupancy, M-Pesa flow hardening,
+service-role exemption, prepaid credit carryover):
 
 ```
-supabase/migrations/20260914000000_core_schema.sql
-supabase/migrations/20260914000001_rls.sql
+supabase/migrations/*.sql
 ```
 
 This creates plans, orgs, members, properties, units, tenants, invoices,
-payments, M-Pesa tables, deposit settlements, plus `record_payment()`
-(atomic FIFO allocation + receipt numbering) and `generate_monthly_invoices()`
-(idempotent per org/month), all behind row-level-security tenant isolation.
+payments, tenant credit ledger, M-Pesa tables, deposit settlements, plus
+`record_payment()` (atomic FIFO allocation + receipt numbering + credit
+carryover) and `generate_monthly_invoices()` (idempotent per org/month,
+consumes held credit oldest-first), all behind row-level-security tenant
+isolation.
 
 To enable automatic monthly invoicing, schedule `select public.generate_invoices_due()`
 daily (Supabase Dashboard → Database → Cron, or pg_cron).
@@ -76,14 +79,14 @@ are included, with SPA fallback routing.
 | Gate | Command | Result |
 |------|---------|--------|
 | Typecheck | `npm run typecheck` | clean |
-| Production build | `npm run build` | `dist/` in ~9 s |
-| Unit tests | `npm run test` | 31/31 (money, phones, months, FIFO, CSV) |
-| DB + RLS suite | `npm run db:verify` | 28/28 on disposable embedded Postgres |
+| Production build | `npm run build` | `dist/` in ~3 s |
+| Unit tests | `npm run test` | 35/35 (money, phones, months, FIFO, CSV) |
+| DB + RLS suite | `npm run db:verify` | 63/63 on disposable embedded Postgres |
 
 `npm run db:verify` spins up a local Postgres (no Docker needed), applies the
-auth shim + both migrations, and asserts cross-org isolation, tenant scoping,
-idempotent invoice generation, FIFO allocation, receipt numbering, and the
-function-only payments ledger.
+auth shim + all migrations, and asserts cross-org isolation, tenant scoping,
+idempotent invoice generation, FIFO allocation, credit carryover, receipt
+numbering, and the function-only payments ledger.
 
 ## M-Pesa setup (per business, in Settings → M-Pesa)
 
