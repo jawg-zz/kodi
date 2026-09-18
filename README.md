@@ -55,12 +55,17 @@ daily (Supabase Dashboard → Database → Cron, or pg_cron).
 
 ```bash
 supabase functions deploy invite-user mpesa-credentials stk-initiate mpesa-callback stk-status
-supabase secrets set SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... CREDENTIALS_KEY=<32+ random chars>
+supabase secrets set SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=... CREDENTIALS_KEY=<32+ random chars>
 ```
 
 `mpesa-callback` is public (`verify_jwt = false` in `functions/config.toml`);
 Safaricom posts STK results there and the function reconciles them into the
-ledger automatically. Authenticated functions verify the caller's JWT and scope
+ledger automatically. Note: Supabase's gateway still demands an API key on
+every functions request, and Safaricom can't send headers — so `stk-initiate`
+registers the Daraja CallBackURL with the anon key as a query param
+(`.../mpesa-callback?apikey=...`). If Safaricom's callback logs show
+"No API key found in request", the `SUPABASE_ANON_KEY` function secret is
+missing or stale. Authenticated functions verify the caller's JWT and scope
 everything to their org.
 
 ## 3. Web app

@@ -105,7 +105,16 @@ Deno.serve(async (req) => {
   }
 
   const base = darajaBase(creds.environment);
-  const callbackUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/mpesa-callback`;
+  // Supabase's gateway rejects webhook POSTs without an API key — even with
+  // verify_jwt=false — with "No API key found in request." Safaricom cannot
+  // send headers, so the anon key (public) travels as a query param. Daraja
+  // POSTs back to this exact URL, query string included.
+  const supabaseUrl = (Deno.env.get("SUPABASE_URL") ?? "").replace(/\/$/, "");
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+  if (!supabaseUrl || !anonKey) {
+    return errorResponse("M-Pesa callbacks are not configured — set SUPABASE_URL and SUPABASE_ANON_KEY secrets", 500);
+  }
+  const callbackUrl = `${supabaseUrl}/functions/v1/mpesa-callback?apikey=${anonKey}`;
   try {
     const token = await darajaToken(base, key, secret);
     const timestamp = darajaTimestamp();
