@@ -5,6 +5,7 @@ import { useAuth } from "../lib/auth";
 import {
   generateInvoices,
   getTenant,
+  getTenantCredit,
   getTenantPortalLink,
   listTenantInvoices,
   listTenantPayments,
@@ -33,6 +34,7 @@ export function TenantDetailPage() {
   const [units, setUnits] = useState<Unit[]>([]);
   const [invoices, setInvoices] = useState<InvoiceWithRefs[]>([]);
   const [payments, setPayments] = useState<PaymentWithRefs[]>([]);
+  const [credit, setCredit] = useState(0);
   const [hasPortal, setHasPortal] = useState(false);
   const [showPay, setShowPay] = useState(false);
   const [showCollect, setShowCollect] = useState(false);
@@ -56,6 +58,11 @@ export function TenantDetailPage() {
       setInvoices(inv);
       setPayments(pay);
       setHasPortal(!!link);
+      try {
+        setCredit(await getTenantCredit(id));
+      } catch {
+        setCredit(0);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -74,7 +81,8 @@ export function TenantDetailPage() {
 
   const balance = invoices.reduce((s, i) => s + i.balance, 0);
   const unit = units.find((u) => u.id === tenant.unit_id);
-  const lastInvoice = invoices[0];
+  const oldest = [...invoices].filter((i) => i.balance > 0).sort((a, b) => a.month.localeCompare(b.month))[0];
+  const netOwed = Math.max(0, balance - credit);
 
   const markNotice = async (status: "active" | "notice") => {
     try {
@@ -103,12 +111,17 @@ export function TenantDetailPage() {
         <Card>
           <CardBody>
             <h2 className="mb-2 font-semibold">Balance</h2>
-            <p className={`text-3xl font-bold ${balance > 0 ? "text-red-600" : "text-brand-600"}`}>
-              {formatKES(balance)}
+            <p className={`text-3xl font-bold ${netOwed > 0 ? "text-red-600" : "text-brand-600"}`}>
+              {formatKES(netOwed)}
             </p>
             <p className="mt-1 text-xs text-slate-500">
-              {balance > 0 ? `owed${lastInvoice ? ` · oldest: ${monthLabel(lastInvoice.month)}` : ""}` : "fully paid up"}
+              {netOwed > 0 ? `owed${oldest ? ` · oldest: ${monthLabel(oldest.month)}` : ""}` : credit > 0 ? "fully paid up — credit held" : "fully paid up"}
             </p>
+            {credit > 0 && (
+              <p className="mt-1 text-xs font-medium text-brand-600">
+                Prepaid credit: {formatKES(credit)} (applies automatically to new invoices)
+              </p>
+            )}
             <div className="mt-3">
               <Badge tone={tenant.status === "active" ? "green" : tenant.status === "notice" ? "amber" : "slate"}>
                 {tenant.status.replace("_", " ")}
@@ -210,7 +223,7 @@ export function TenantDetailPage() {
                         <td className="py-2 pr-3">{new Date(p.paid_at).toLocaleDateString("en-GB")}</td>
                         <td className="py-2 text-xs text-slate-500">
                           {p.allocations.length === 0
-                            ? "credit"
+                            ? "held as prepaid credit"
                             : p.allocations.map((a) => `${formatKES(a.amount)}`).join(" + ")}
                         </td>
                       </tr>
@@ -239,18 +252,17 @@ export function TenantDetailPage() {
           orgId={org!.id}
           tenantId={tenant.id}
           tenantName={tenant.full_name}
-          suggested={lastInvoice && lastInvoice.balance > 0 ? lastInvoice.balance : (unit?.rent_amount ?? 0)}
+          suggested={netOwed > 0 ? netOwed : (unit?.rent_amount ?? 0)}
           onClose={() => setShowPay(false)}
           onRecorded={load}
         />
       )}
       {showCollect && (
         <MpesaCollectModal
-          orgId={org!.id}
           tenantId={tenant.id}
           tenantName={tenant.full_name}
           defaultPhone={tenant.phone}
-          defaultAmount={lastInvoice && lastInvoice.balance > 0 ? lastInvoice.balance : (unit?.rent_amount ?? 0)}
+          defaultAmount={netOwed > 0 ? netOwed : (unit?.rent_amount ?? 0)}
           onClose={() => setShowCollect(false)}
           onRecorded={load}
         />
@@ -266,7 +278,7 @@ export function TenantDetailPage() {
       )}
       {showSettle && tenant && (
         <SettleDepositModal
-          outstanding={invoices.reduce((sum, i) => sum + i.balance, 0)}
+          outstanding={netOwed}
           orgId={org!.id}
           tenant={tenant}
           onClose={() => setShowSettle(false)}
@@ -356,7 +368,8 @@ export function RecordPaymentModal({ orgId, tenantId, tenantName, suggested, onC
           </Field>
         </div>
         <p className="text-xs text-slate-500">
-          The payment applies to the oldest unpaid invoice first; any remainder stays as credit.
+          The payment applies to the oldest unpaid invoice first; any remainder is kept as prepaid
+          credit and applies automatically to the next invoice.
         </p>
         {error && <ErrorBanner message={error} />}
         <div className="flex justify-end gap-2">

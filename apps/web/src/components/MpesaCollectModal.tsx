@@ -30,8 +30,7 @@ const STATUS_LABEL: Record<string, string> = {
   timeout: "Expired",
 };
 
-export function MpesaCollectModal({ orgId, tenantId, tenantName, defaultPhone, defaultAmount, onClose, onRecorded }: {
-  orgId: string;
+export function MpesaCollectModal({ tenantId, tenantName, defaultPhone, defaultAmount, onClose, onRecorded }: {
   tenantId: string;
   tenantName: string;
   defaultPhone: string;
@@ -55,7 +54,6 @@ export function MpesaCollectModal({ orgId, tenantId, tenantName, defaultPhone, d
 
   useEffect(() => {
     if (phase !== "waiting") return;
-    setSecondsLeft(PIN_TIMEOUT_SECS);
     const countdown = setInterval(
       () => setSecondsLeft((s) => (s > 0 ? s - 1 : 0)),
       1000
@@ -97,7 +95,7 @@ export function MpesaCollectModal({ orgId, tenantId, tenantName, defaultPhone, d
           setPhase("error");
           setError("Still waiting for M-Pesa. You can close this and check Payments later — confirmed payments record automatically.");
         }
-      } catch (e) {
+      } catch {
         if (!alive) return;
         // Transient poll failures: keep waiting until attempts run out.
       }
@@ -107,8 +105,6 @@ export function MpesaCollectModal({ orgId, tenantId, tenantName, defaultPhone, d
       clearInterval(timer);
     };
   }, [phase, checkoutId, onRecorded]);
-
-  void orgId;
 
   const start = async () => {
     if (sendingRef.current) return; // double-tap guard
@@ -141,6 +137,7 @@ export function MpesaCollectModal({ orgId, tenantId, tenantName, defaultPhone, d
       if (fnError) throw new Error(fnError.message);
       const res = data as { checkoutRequestId: string; deduplicated?: boolean };
       setCheckoutId(res.checkoutRequestId);
+      setSecondsLeft(PIN_TIMEOUT_SECS);
       setPhase("waiting");
       setMessage(
         `${res.deduplicated ? "A prompt for this payment was already sent — reusing it. " : ""}` +

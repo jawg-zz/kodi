@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../lib/auth";
 import {
+  getTenantCredit,
   listTenantInvoices,
   listTenantPayments,
 } from "../lib/api";
@@ -18,6 +19,7 @@ export function PortalPage() {
   const [error, setError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<InvoiceWithRefs[]>([]);
   const [payments, setPayments] = useState<PaymentWithRefs[]>([]);
+  const [credit, setCredit] = useState(0);
   const [showPay, setShowPay] = useState(false);
   const [tx, setTx] = useState<MpesaTransaction | null>(null);
 
@@ -32,6 +34,12 @@ export function PortalPage() {
       ]);
       setInvoices(inv);
       setPayments(pay);
+      try {
+        setCredit(await getTenantCredit(tenant.id));
+      } catch {
+        // Credit table may not exist on older backends — fail open.
+        setCredit(0);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -74,17 +82,18 @@ export function PortalPage() {
   if (!tenant) return <ErrorBanner message="Tenant account not found." />;
 
   const balance = invoices.reduce((s, i) => s + i.balance, 0);
-  const oldest = invoices.filter((i) => i.balance > 0).at(-1);
+  const oldest = [...invoices].filter((i) => i.balance > 0).sort((a, b) => a.month.localeCompare(b.month))[0];
+  const netOwed = Math.max(0, balance - credit);
 
   return (
     <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-3">
-        <Stat label="Balance owed" value={formatKES(balance)} accent={balance > 0 ? "red" : "green"} sub={oldest ? `oldest: ${monthLabel(oldest.month)}` : "all paid up"} />
+        <Stat label="Balance owed" value={formatKES(netOwed)} accent={netOwed > 0 ? "red" : "green"} sub={oldest ? `oldest: ${monthLabel(oldest.month)}` : credit > 0 ? "all paid up — credit held" : "all paid up"} />
         <Stat label="Invoices" value={String(invoices.length)} sub={`${invoices.filter((i) => i.status === "paid").length} paid`} />
-        <Stat label="Payments made" value={String(payments.length)} sub={payments.length ? `latest ${formatKES(payments[0].amount)}` : "none yet"} />
+        <Stat label={credit > 0 ? "Prepaid credit" : "Payments made"} value={credit > 0 ? formatKES(credit) : String(payments.length)} sub={credit > 0 ? "applies automatically to new invoices" : payments.length ? `latest ${formatKES(payments[0].amount)}` : "none yet"} />
       </div>
 
-      {balance > 0 && (
+      {netOwed > 0 && (
         <Card>
           <CardBody>
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -179,7 +188,7 @@ export function PortalPage() {
         <SelfPayModal
           tenantId={tenant.id}
           phone={tenant.phone}
-          balance={balance}
+          balance={netOwed}
           onClose={() => setShowPay(false)}
           onStarted={setTx}
         />

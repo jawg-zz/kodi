@@ -47,6 +47,10 @@ export function ReportsPage() {
     return out.reverse();
   }, []);
 
+  // Snapshot once per data load so the 30-day window is stable across renders.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const nowMs = useMemo(() => Date.now(), [payments]);
+
   if (loading) return <Loading label="Loading reports…" />;
   if (error) return <ErrorBanner message={error} />;
 
@@ -61,7 +65,7 @@ export function ReportsPage() {
 
   const totalOutstanding = invoices.reduce((s, i) => s + i.balance, 0);
   const totalCollected30 = payments
-    .filter((p) => Date.now() - new Date(p.paid_at).getTime() < 30 * 86400_000)
+    .filter((p) => nowMs - new Date(p.paid_at).getTime() < 30 * 86400_000)
     .reduce((s, p) => s + p.amount, 0);
 
   // Arrears per tenant (open balances), optionally filtered by property

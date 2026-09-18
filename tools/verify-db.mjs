@@ -380,6 +380,42 @@ async function main() {
       q("select record_payment($1,$2,$3,'mpesa_manual','DUPECODE123')", [org1, t1, 500]),
       "duplicate key");
 
+    // --- tenant credit carryover -------------------------------------------
+    // t1 overpaid by 500 (4000 cash vs 3500 due) + 500 (DUPECODE123 vs zero
+    // open balance): both leftovers must persist as credit, not vanish.
+    const t1credit = (await q("select balance from tenant_credits where tenant_id=$1", [t1])).rows[0]?.balance;
+    check("overpayment leftover persisted as tenant credit (1000)", t1credit === 1000, String(t1credit));
+
+    await asUser(userT);
+    const tCred = await q("select count(*)::int as n from tenant_credits");
+    check("tenant sees own credit row", tCred.rows[0].n === 1, String(tCred.rows[0].n));
+    await expectError("tenant cannot write tenant_credits", () =>
+      q("insert into tenant_credits (org_id, tenant_id, balance) values ($1,$2,1)", [org1, t1]),
+      "row-level security");
+
+    // Carryover: org2 overpays this month; next month's invoice is reduced.
+    await asUser(userB);
+    await q("select generate_monthly_invoices($1,$2)", [org2, month]);
+    await q("select record_payment($1,$2,$3,'cash')", [org2, org2Tenant, 9500]);
+    const maryPaid = (await q("select balance, status from invoices where tenant_id=$1 and month=$2",
+      [org2Tenant, month])).rows[0];
+    check("overpaid invoice settled in full", maryPaid.balance === 0 && maryPaid.status === "paid",
+      JSON.stringify(maryPaid));
+    const maryCredit = (await q("select balance from tenant_credits where tenant_id=$1", [org2Tenant])).rows[0]?.balance;
+    check("org2 overpayment held as credit (500)", maryCredit === 500, String(maryCredit));
+    const nextMonth = (() => {
+      const [y, m] = month.split("-").map(Number);
+      const d = new Date(Date.UTC(y, m, 1));
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    })();
+    await q("select generate_monthly_invoices($1,$2)", [org2, nextMonth]);
+    const maryNext = (await q("select balance, status from invoices where tenant_id=$1 and month=$2",
+      [org2Tenant, nextMonth])).rows[0];
+    check("credit consumed against next invoice (8500 partial)",
+      maryNext.balance === 8500 && maryNext.status === "partial", JSON.stringify(maryNext));
+    const maryCreditAfter = (await q("select balance from tenant_credits where tenant_id=$1", [org2Tenant])).rows[0]?.balance;
+    check("credit zeroed after carryover", maryCreditAfter === 0, String(maryCreditAfter));
+
     // --- service-role exemption (M-Pesa callback path, no JWT) ----------------
     await asSuper();
     await q(`select set_config('request.jwt.claims', $1, false)`,

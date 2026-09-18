@@ -200,6 +200,7 @@ export function StatementDocPage() {
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [invoices, setInvoices] = useState<InvoiceWithRefs[]>([]);
   const [payments, setPayments] = useState<PaymentWithRefs[]>([]);
+  const [credit, setCredit] = useState(0);
   const [orgName, setOrgName] = useState("Kodi");
   const [error, setError] = useState<string | null>(null);
 
@@ -217,6 +218,8 @@ export function StatementDocPage() {
       else setInvoices((inv.data ?? []) as InvoiceWithRefs[]);
       if (pay.error) setError(pay.error.message);
       else setPayments((pay.data ?? []) as PaymentWithRefs[]);
+      const cred = await supabase.from("tenant_credits").select("balance").eq("tenant_id", tenantId).maybeSingle();
+      if (!cred.error) setCredit(((cred.data as { balance?: number } | null)?.balance) ?? 0);
     })();
   }, [tenantId]);
 
@@ -224,12 +227,16 @@ export function StatementDocPage() {
   if (!tenant) return <div className="p-10"><Loading label="Loading statement…" /></div>;
 
   const balance = invoices.reduce((s, i) => s + i.balance, 0);
+  const netOwed = Math.max(0, balance - credit);
 
   return (
     <DocShell orgName={orgName} title={`Tenant statement — ${tenant.full_name}`}>
       <p className="mt-3 text-sm text-slate-600">
         {tenant.phone} · Deposit held: <Money value={tenant.deposit_held} /> · Current balance:{" "}
-        <Money value={balance} className="font-bold" />
+        <Money value={netOwed} className="font-bold" />
+        {credit > 0 && (
+          <span> (includes <Money value={credit} /> prepaid credit)</span>
+        )}
       </p>
       <h3 className="mt-4 font-semibold">Invoices</h3>
       <Table

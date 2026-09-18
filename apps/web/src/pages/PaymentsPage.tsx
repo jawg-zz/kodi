@@ -274,7 +274,7 @@ export function ReceiptPage() {
           <div className="border-t border-slate-100 pt-2">
             <p className="mb-1 text-slate-500">Applied to</p>
             {payment.allocations.length === 0 ? (
-              <p className="text-slate-500">Held as credit (no open invoices).</p>
+              <p className="text-slate-500">Held as prepaid credit — applies automatically to the next invoice.</p>
             ) : (
               <ul className="space-y-1">
                 {payment.allocations.map((a, i) => (

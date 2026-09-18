@@ -79,13 +79,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setOrg(null);
     }
 
-    // Tenant portal link
+    // Tenant portal link. The embedded tenant may come back as an object
+    // (to-one) or a one-element array depending on the PostgREST version —
+    // accept both so tenant logins are never misread as "no tenant".
     const t = await supabase
       .from("tenant_users")
       .select("tenant:tenants(*)")
       .eq("user_id", userId)
       .maybeSingle();
-    setTenant(t.data ? (((t.data as unknown as { tenant: Tenant[] }).tenant?.[0]) ?? null) : null);
+    const linked = (t.data as unknown as { tenant?: Tenant | Tenant[] | null } | null)?.tenant;
+    setTenant(Array.isArray(linked) ? (linked[0] ?? null) : (linked ?? null));
   }, []);
 
   useEffect(() => {

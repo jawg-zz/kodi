@@ -30,10 +30,12 @@ export function SettingsPage() {
 
   useEffect(() => {
     if (!org) return;
+    let cancelled = false;
     listStaff(org.id)
-      .then(setStaff)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
+      .then((s) => { if (!cancelled) setStaff(s); })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [org?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return <Loading label="Loading settings…" />;

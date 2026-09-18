@@ -212,6 +212,17 @@ export async function listSettlements(orgId: string): Promise<DepositSettlement[
   return (data ?? []) as DepositSettlement[];
 }
 
+/** Prepaid credit held for a tenant (overpayments carried forward). */
+export async function getTenantCredit(tenantId: string): Promise<number> {
+  const { data, error } = await supabase
+    .from("tenant_credits")
+    .select("balance")
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  boom(error);
+  return ((data as { balance?: number } | null)?.balance) ?? 0;
+}
+
 // ---------------------------------------------------------------------------
 // Invoices
 // ---------------------------------------------------------------------------
