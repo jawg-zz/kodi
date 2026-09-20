@@ -300,9 +300,9 @@ export function InviteTenantButton({ tenant }: { tenant: Tenant }) {
         kind: "tenant",
         tenantId: tenant.id,
       });
-      setResult(r.invited
-        ? `Portal login created for ${r.email}. Temporary password: ${r.tempPassword} — share it with the tenant; they can change it after signing in.`
-        : `Account already exists for ${r.email} — it is now linked to this tenant.`);
+      setResult(
+        `Portal invite created for ${r.email}. Share this link: ${window.location.origin}/invite/${r.inviteToken} — it expires in 7 days.`,
+      );
       setShowForm(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

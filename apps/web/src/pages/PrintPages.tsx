@@ -1,14 +1,19 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { formatDate, formatDateTime, formatKES, monthLabel } from "@kodi/shared";
-import { supabase } from "../lib/supabase";
+import {
+  getInvoice,
+  getPayment,
+  getSettlement,
+  getTenant,
+  getTenantCredit,
+  listTenantInvoices,
+  listTenantPayments,
+} from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { Loading, ErrorBanner } from "../components/ui";
 import { Money } from "../components/domain";
 import type { DepositSettlement, InvoiceWithRefs, PaymentWithRefs, Tenant } from "../lib/types";
-
-interface DocOrg {
-  name: string;
-}
 
 function DocShell({ orgName, title, children }: { orgName: string; title: string; children: React.ReactNode }) {
   return (
@@ -59,9 +64,8 @@ function Table({ head, rows }: { head: string[]; rows: React.ReactNode[][] }) {
   );
 }
 
-async function fetchOrgName(orgId: string): Promise<string> {
-  const { data } = await supabase.from("orgs").select("name").eq("id", orgId).maybeSingle();
-  return ((data as DocOrg | null)?.name) ?? "Kodi";
+async function fetchOrgName(orgName: string | null): Promise<string> {
+  return orgName ?? "Kodi";
 }
 
 // ---------------------------------------------------------------------------
@@ -69,26 +73,21 @@ async function fetchOrgName(orgId: string): Promise<string> {
 // ---------------------------------------------------------------------------
 export function InvoiceDocPage() {
   const { id } = useParams<{ id: string }>();
+  const { org } = useAuth();
   const [inv, setInv] = useState<(InvoiceWithRefs & { tenant: (Tenant & { unit_label?: string }) | null }) | null>(null);
   const [orgName, setOrgName] = useState("Kodi");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
-    supabase
-      .from("invoices")
-      .select("*, tenant:tenants(*), unit:units(label)")
-      .eq("id", id)
-      .maybeSingle()
-      .then(async ({ data, error: e }) => {
-        if (e) setError(e.message);
-        else if (!data) setError("Invoice not found.");
-        else {
-          setInv(data as typeof inv);
-          setOrgName(await fetchOrgName((data as { org_id: string }).org_id));
-        }
-      });
-  }, [id]);
+    getInvoice(id).then(async (data) => {
+      if (!data) setError("Invoice not found.");
+      else {
+        setInv(data as typeof inv);
+        setOrgName(await fetchOrgName(org?.name ?? null));
+      }
+    }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <div className="p-10"><ErrorBanner message={error} /></div>;
   if (!inv) return <div className="p-10"><Loading label="Loading invoice…" /></div>;
@@ -130,26 +129,21 @@ export function InvoiceDocPage() {
 // ---------------------------------------------------------------------------
 export function ReceiptDocPage() {
   const { id } = useParams<{ id: string }>();
+  const { org } = useAuth();
   const [pay, setPay] = useState<(PaymentWithRefs & { org_id: string }) | null>(null);
   const [orgName, setOrgName] = useState("Kodi");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
-    supabase
-      .from("payments")
-      .select("*, tenant:tenants(*)")
-      .eq("id", id)
-      .maybeSingle()
-      .then(async ({ data, error: e }) => {
-        if (e) setError(e.message);
-        else if (!data) setError("Receipt not found.");
-        else {
-          setPay(data as typeof pay);
-          setOrgName(await fetchOrgName((data as { org_id: string }).org_id));
-        }
-      });
-  }, [id]);
+    getPayment(id).then(async (data) => {
+      if (!data) setError("Receipt not found.");
+      else {
+        setPay(data as typeof pay);
+        setOrgName(await fetchOrgName(org?.name ?? null));
+      }
+    }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <div className="p-10"><ErrorBanner message={error} /></div>;
   if (!pay) return <div className="p-10"><Loading label="Loading receipt…" /></div>;
@@ -197,6 +191,7 @@ export function ReceiptDocPage() {
 // ---------------------------------------------------------------------------
 export function StatementDocPage() {
   const { tenantId } = useParams<{ tenantId: string }>();
+  const { org } = useAuth();
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [invoices, setInvoices] = useState<InvoiceWithRefs[]>([]);
   const [payments, setPayments] = useState<PaymentWithRefs[]>([]);
@@ -207,21 +202,27 @@ export function StatementDocPage() {
   useEffect(() => {
     if (!tenantId) return;
     (async () => {
-      const t = await supabase.from("tenants").select("*").eq("id", tenantId).maybeSingle();
-      if (t.error) { setError(t.error.message); return; }
-      if (!t.data) { setError("Tenant not found."); return; }
-      setTenant(t.data as Tenant);
-      setOrgName(await fetchOrgName((t.data as Tenant).org_id));
-      const inv = await supabase.from("invoices").select("*").eq("tenant_id", tenantId).order("month");
-      const pay = await supabase.from("payments").select("*").eq("tenant_id", tenantId).order("paid_at");
-      if (inv.error) setError(inv.error.message);
-      else setInvoices((inv.data ?? []) as InvoiceWithRefs[]);
-      if (pay.error) setError(pay.error.message);
-      else setPayments((pay.data ?? []) as PaymentWithRefs[]);
-      const cred = await supabase.from("tenant_credits").select("balance").eq("tenant_id", tenantId).maybeSingle();
-      if (!cred.error) setCredit(((cred.data as { balance?: number } | null)?.balance) ?? 0);
+      try {
+        const t = await getTenant(tenantId);
+        if (!t) { setError("Tenant not found."); return; }
+        setTenant(t);
+        setOrgName(await fetchOrgName(org?.name ?? null));
+        const [inv, pay] = await Promise.all([
+          listTenantInvoices(tenantId),
+          listTenantPayments(tenantId),
+        ]);
+        setInvoices(inv);
+        setPayments(pay);
+        try {
+          setCredit(await getTenantCredit(tenantId));
+        } catch {
+          setCredit(0);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     })();
-  }, [tenantId]);
+  }, [tenantId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <div className="p-10"><ErrorBanner message={error} /></div>;
   if (!tenant) return <div className="p-10"><Loading label="Loading statement…" /></div>;
@@ -267,26 +268,21 @@ export function StatementDocPage() {
 // ---------------------------------------------------------------------------
 export function SettlementDocPage() {
   const { id } = useParams<{ id: string }>();
+  const { org } = useAuth();
   const [s, setS] = useState<(DepositSettlement & { tenant?: Tenant | null }) | null>(null);
   const [orgName, setOrgName] = useState("Kodi");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
-    supabase
-      .from("deposit_settlements")
-      .select("*, tenant:tenants(*)")
-      .eq("id", id)
-      .maybeSingle()
-      .then(async ({ data, error: e }) => {
-        if (e) setError(e.message);
-        else if (!data) setError("Settlement not found.");
-        else {
-          setS(data as typeof s);
-          setOrgName(await fetchOrgName((data as { org_id: string }).org_id));
-        }
-      });
-  }, [id]);
+    getSettlement(id).then(async (data) => {
+      if (!data) setError("Settlement not found.");
+      else {
+        setS(data as typeof s);
+        setOrgName(await fetchOrgName(org?.name ?? null));
+      }
+    }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <div className="p-10"><ErrorBanner message={error} /></div>;
   if (!s) return <div className="p-10"><Loading label="Loading settlement…" /></div>;
