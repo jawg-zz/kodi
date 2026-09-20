@@ -13,10 +13,11 @@ import { PaymentsPage, ReceiptPage } from "./pages/PaymentsPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { PortalPage } from "./pages/PortalPage";
+import { InvitePage } from "./pages/InvitePage";
 import { InvoiceDocPage, ReceiptDocPage, SettlementDocPage, StatementDocPage } from "./pages/PrintPages";
 
 function RequireAuth() {
-  const { loading, session } = useAuth();
+  const { loading, isAuthenticated } = useAuth();
   if (loading) {
     return (
       <div className="mx-auto max-w-md p-10">
@@ -24,7 +25,7 @@ function RequireAuth() {
       </div>
     );
   }
-  if (!session) return <Navigate to="/login" replace />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
   return <Outlet />;
 }
 
@@ -56,7 +57,7 @@ function RequireTenant() {
 }
 
 function HomeRedirect() {
-  const { loading, session, org, tenant, membership } = useAuth();
+  const { loading, isAuthenticated, org, tenant, membership } = useAuth();
   if (loading) {
     return (
       <div className="mx-auto max-w-md p-10">
@@ -64,7 +65,7 @@ function HomeRedirect() {
       </div>
     );
   }
-  if (!session) return <Navigate to="/login" replace />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (tenant && !membership) return <Navigate to="/portal" replace />;
   if (!org) return <Navigate to="/onboarding" replace />;
   return <Navigate to="/app" replace />;
@@ -76,6 +77,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
+        <Route path="/invite/:token" element={<InvitePage />} />
 
         <Route element={<RequireAuth />}>
           <Route path="/onboarding" element={<OnboardingPage />} />

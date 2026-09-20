@@ -9,6 +9,5 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
-        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:?VITE_SUPABASE_URL is required}
-        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:?VITE_SUPABASE_ANON_KEY is required}
+        VITE_CONVEX_URL: ${VITE_CONVEX_URL:?VITE_CONVEX_URL is required}
     restart: unless-stopped

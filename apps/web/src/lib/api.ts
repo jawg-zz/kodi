@@ -1,4 +1,5 @@
-import { supabase } from "./supabase";
+import { convex } from "./convex";
+import { api } from "../../../../convex/_generated/api";
 import type {
   DepositSettlement,
   Invoice,
@@ -13,165 +14,415 @@ import type {
   UnitWithTenant,
 } from "./types";
 
-function friendlyDbError(error: { message: string; code?: string }): never {
-  const msg = error.message;
-  if (error.code === "23505" || msg.includes("duplicate key")) {
-    if (msg.includes("tenants") || msg.includes("idx_tenants_org_phone")) {
-      throw new Error("A tenant with this phone number already exists in your business.");
-    }
-    if (msg.includes("units")) {
-      throw new Error("A unit with this label already exists in this property.");
-    }
-    if (msg.includes("uq_tenants_unit_active")) {
-      throw new Error("That unit already has an active tenant. Move them out first, or pick a vacant unit.");
-    }
-    if (msg.includes("tenant_users")) {
-      throw new Error("This tenant already has a portal login.");
-    }
-    throw new Error("This record already exists.");
-  }
-  if (msg.includes("Unit limit reached")) {
-    throw new Error(msg);
-  }
-  throw new Error(msg);
+function err(e: unknown): never {
+  throw new Error(e instanceof Error ? e.message : String(e));
 }
 
-function boom(error: { message: string; code?: string } | null): void {
-  if (error) friendlyDbError(error);
+const iso = (ms: number): string => new Date(ms).toISOString();
+
+// ---------------------------------------------------------------------------
+// Translators: camelCase Convex rows -> snake_case frontend types
+// ---------------------------------------------------------------------------
+function toOrg(r: any): Org {
+  return {
+    id: r._id,
+    name: r.name,
+    plan_code: r.plan_code,
+    subscription_status: r.subscription_status,
+    subscription_period_end: r.subscription_period_end ?? null,
+    invoice_due_day: r.invoice_due_day,
+    created_at: iso(r._creationTime),
+  };
+}
+
+function toProperty(r: any): Property {
+  return {
+    id: r._id,
+    org_id: r.orgId,
+    name: r.name,
+    property_type: r.property_type,
+    location: r.location,
+    notes: r.notes ?? null,
+    created_at: iso(r._creationTime),
+  };
+}
+
+function emptyTenant(id: string, orgId: string): Tenant {
+  return {
+    id,
+    org_id: orgId,
+    full_name: "",
+    phone: "",
+    national_id: "",
+    unit_id: null,
+    move_in_date: null,
+    deposit_held: 0,
+    status: "active",
+    notes: null,
+  };
+}
+
+function toTenant(r: any): Tenant {
+  return {
+    id: r._id,
+    org_id: r.orgId,
+    full_name: r.full_name,
+    phone: r.phone,
+    national_id: r.national_id ?? "",
+    unit_id: r.unitId ?? null,
+    move_in_date: r.move_in_date ?? null,
+    deposit_held: r.deposit_held ?? 0,
+    status: r.status,
+    notes: r.notes ?? null,
+  };
+}
+
+function toUnit(r: any): Unit {
+  return {
+    id: r._id,
+    org_id: r.orgId,
+    property_id: r.propertyId,
+    label: r.label,
+    unit_type: r.unit_type,
+    rent_amount: r.rent_amount,
+    water_charge: r.water_charge,
+    garbage_charge: r.garbage_charge,
+    status: r.status,
+    current_tenant_id: r.currentTenantId ?? null,
+  };
+}
+
+function toUnitWithTenant(r: any): UnitWithTenant {
+  const unit = toUnit(r);
+  let tenant: Tenant | null = null;
+  if (r.tenant) {
+    tenant = {
+      ...emptyTenant(r.tenant._id ?? r.tenant.id, r.orgId),
+      full_name: r.tenant.full_name,
+      phone: r.tenant.phone,
+      status: r.tenant.status ?? "active",
+      deposit_held: r.tenant.deposit_held ?? 0,
+      unit_id: r._id,
+    };
+  }
+  return { ...unit, tenant };
+}
+
+function emptyUnit(id: string): Unit {
+  return {
+    id,
+    org_id: "",
+    property_id: "",
+    label: "",
+    unit_type: "bedsitter",
+    rent_amount: 0,
+    water_charge: 0,
+    garbage_charge: 0,
+    status: "vacant",
+    current_tenant_id: null,
+  };
+}
+
+function toInvoice(r: any): InvoiceWithRefs {
+  return {
+    id: r._id,
+    org_id: r.orgId,
+    tenant_id: r.tenantId,
+    unit_id: r.unitId ?? null,
+    month: r.month,
+    lines: r.lines,
+    total: r.total,
+    due_date: r.dueDate,
+    status: r.status,
+    balance: r.balance,
+    notes: r.notes ?? null,
+    tenant: r.tenant
+      ? { ...emptyTenant(r.tenant._id, r.orgId), full_name: r.tenant.full_name, phone: r.tenant.phone }
+      : null,
+    unit: r.unit ? { ...emptyUnit(r.unit._id), label: r.unit.label } : null,
+  };
+}
+
+function toPayment(r: any): PaymentWithRefs {
+  return {
+    id: r._id,
+    org_id: r.orgId,
+    tenant_id: r.tenantId,
+    amount: r.amount,
+    method: r.method,
+    mpesa_code: r.mpesaCode ?? null,
+    paid_at: iso(r.paidAt),
+    allocations: (r.allocations ?? []).map((a: any) => ({
+      invoiceId: a.invoiceId,
+      amount: a.amount,
+    })),
+    receipt_no: r.receiptNo,
+    recorded_by: r.recordedBy ?? null,
+    note: r.note ?? null,
+    tenant: r.tenant
+      ? {
+          ...emptyTenant(r.tenant._id, r.orgId),
+          full_name: r.tenant.full_name,
+          phone: r.tenant.phone ?? "",
+          unit_id: r.tenant.unitId ?? null,
+        }
+      : null,
+  };
+}
+
+function toTx(r: any): MpesaTransaction {
+  return {
+    id: r._id,
+    org_id: r.orgId,
+    tenant_id: r.tenantId,
+    checkout_request_id: r.checkoutRequestId,
+    merchant_request_id: r.merchantRequestId ?? null,
+    phone: r.phone,
+    amount: r.amount,
+    status: r.status,
+    result_code: r.resultCode ?? null,
+    result_desc: r.resultDesc ?? null,
+    mpesa_receipt: r.mpesaReceipt ?? null,
+    payment_id: r.paymentId ?? null,
+    created_at: iso(r._creationTime),
+  };
+}
+
+function toSettlement(r: any): DepositSettlement {
+  return {
+    id: r._id,
+    org_id: r.orgId,
+    tenant_id: r.tenantId,
+    deposit_held: r.depositHeld,
+    deductions: r.deductions ?? [],
+    total_deductions: r.totalDeductions,
+    refund_amount: r.refundAmount,
+    notes: r.notes ?? null,
+    created_at: iso(r._creationTime),
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Properties & units
 // ---------------------------------------------------------------------------
 export async function listProperties(orgId: string): Promise<Property[]> {
-  const { data, error } = await supabase
-    .from("properties")
-    .select("*")
-    .eq("org_id", orgId)
-    .order("name");
-  boom(error);
-  return (data ?? []) as Property[];
+  try {
+    const rows = (await convex.query((api as any).properties.listProperties, {
+      orgId,
+    })) as any[];
+    return rows.map(toProperty);
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function listUnits(orgId: string): Promise<UnitWithTenant[]> {
-  const { data, error } = await supabase
-    .from("units")
-    .select("*, tenant:tenants!units_current_tenant_fkey(id, full_name, phone, status, deposit_held)")
-    .eq("org_id", orgId)
-    .order("label");
-  boom(error);
-  return (data ?? []) as unknown as UnitWithTenant[];
+  try {
+    const rows = (await convex.query((api as any).properties.listUnits, {
+      orgId,
+    })) as any[];
+    return rows.map(toUnitWithTenant);
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function countUnits(orgId: string): Promise<number> {
-  const { count, error } = await supabase
-    .from("units")
-    .select("id", { count: "exact", head: true })
-    .eq("org_id", orgId);
-  boom(error);
-  return count ?? 0;
+  try {
+    return (await convex.query((api as any).properties.countUnits, {
+      orgId,
+    })) as number;
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function createProperty(
   orgId: string,
-  values: Pick<Property, "name" | "property_type" | "location" | "notes">
+  values: Pick<Property, "name" | "property_type" | "location" | "notes">,
 ): Promise<Property> {
-  const { data, error } = await supabase
-    .from("properties")
-    .insert({ ...values, org_id: orgId })
-    .select("*")
-    .single();
-  boom(error);
-  return data as Property;
+  try {
+    const row = (await convex.mutation((api as any).properties.createProperty, {
+      orgId,
+      name: values.name,
+      property_type: values.property_type,
+      location: values.location ?? "",
+      notes: values.notes ?? undefined,
+    })) as any;
+    return toProperty(row);
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function updateProperty(id: string, values: Partial<Property>): Promise<void> {
-  const { error } = await supabase.from("properties").update(values).eq("id", id);
-  boom(error);
+export async function updateProperty(
+  id: string,
+  values: Partial<Property>,
+): Promise<void> {
+  try {
+    await convex.mutation((api as any).properties.updateProperty, {
+      id,
+      name: values.name,
+      property_type: values.property_type,
+      location: values.location,
+      notes: values.notes ?? undefined,
+    });
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function deleteProperty(id: string): Promise<void> {
-  const { error } = await supabase.from("properties").delete().eq("id", id);
-  boom(error);
+  try {
+    await convex.mutation((api as any).properties.deleteProperty, { id });
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function createUnit(
   orgId: string,
-  values: Omit<Unit, "id" | "org_id" | "status" | "current_tenant_id">
+  values: Omit<Unit, "id" | "org_id" | "status" | "current_tenant_id">,
 ): Promise<Unit> {
-  const { data, error } = await supabase
-    .from("units")
-    .insert({ ...values, org_id: orgId })
-    .select("*")
-    .single();
-  boom(error);
-  return data as Unit;
+  try {
+    const row = (await convex.mutation((api as any).properties.createUnit, {
+      orgId,
+      propertyId: (values as any).property_id,
+      label: values.label,
+      unit_type: values.unit_type,
+      rent_amount: values.rent_amount,
+      water_charge: values.water_charge,
+      garbage_charge: values.garbage_charge,
+    })) as any;
+    return toUnit(row);
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function updateUnit(id: string, values: Partial<Unit>): Promise<void> {
-  const { error } = await supabase.from("units").update(values).eq("id", id);
-  boom(error);
+export async function updateUnit(
+  id: string,
+  values: Partial<Unit> & { property_id?: string },
+): Promise<void> {
+  try {
+    await convex.mutation((api as any).properties.updateUnit, {
+      id,
+      label: values.label,
+      unit_type: values.unit_type,
+      rent_amount: values.rent_amount,
+      water_charge: values.water_charge,
+      garbage_charge: values.garbage_charge,
+      propertyId: (values as any).property_id,
+    });
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function deleteUnit(id: string): Promise<void> {
-  const { error } = await supabase.from("units").delete().eq("id", id);
-  boom(error);
+  try {
+    await convex.mutation((api as any).properties.deleteUnit, { id });
+  } catch (e) {
+    return err(e);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Tenants
 // ---------------------------------------------------------------------------
 export async function listTenants(orgId: string): Promise<Tenant[]> {
-  const { data, error } = await supabase
-    .from("tenants")
-    .select("*")
-    .eq("org_id", orgId)
-    .order("full_name");
-  boom(error);
-  return (data ?? []) as Tenant[];
+  try {
+    const rows = (await convex.query((api as any).tenants.listTenants, {
+      orgId,
+    })) as any[];
+    return rows.map(toTenant);
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function getTenant(id: string): Promise<Tenant | null> {
-  const { data, error } = await supabase
-    .from("tenants")
-    .select("*")
-    .eq("id", id)
-    .maybeSingle();
-  boom(error);
-  return (data as Tenant) ?? null;
+  try {
+    const row = (await convex.query((api as any).tenants.getTenant, {
+      id,
+    })) as any;
+    return row ? toTenant(row) : null;
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function createTenant(
   orgId: string,
-  values: Omit<Tenant, "id" | "org_id" | "status" | "notes"> & { notes?: string }
+  values: Omit<Tenant, "id" | "org_id" | "status" | "notes"> & {
+    notes?: string;
+  },
 ): Promise<Tenant> {
-  const { data, error } = await supabase
-    .from("tenants")
-    .insert({ ...values, org_id: orgId })
-    .select("*")
-    .single();
-  boom(error);
-  return data as Tenant;
+  try {
+    const row = (await convex.mutation((api as any).tenants.createTenant, {
+      orgId,
+      full_name: values.full_name,
+      phone: values.phone,
+      national_id: (values as any).national_id ?? "",
+      unitId: (values as any).unit_id ?? undefined,
+      move_in_date: (values as any).move_in_date ?? undefined,
+      deposit_held: (values as any).deposit_held ?? 0,
+      notes: (values as any).notes ?? undefined,
+    })) as any;
+    return toTenant(row);
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function updateTenant(id: string, values: Partial<Tenant>): Promise<void> {
-  const { error } = await supabase.from("tenants").update(values).eq("id", id);
-  boom(error);
+export async function updateTenant(
+  id: string,
+  values: Partial<Tenant>,
+): Promise<void> {
+  try {
+    await convex.mutation((api as any).tenants.updateTenant, {
+      id,
+      full_name: values.full_name,
+      phone: values.phone,
+      national_id: (values as any).national_id,
+      unitId:
+        (values as any).unit_id === null
+          ? null
+          : ((values as any).unit_id ?? undefined),
+      move_in_date:
+        (values as any).move_in_date === null
+          ? null
+          : ((values as any).move_in_date ?? undefined),
+      deposit_held: values.deposit_held,
+      status: values.status,
+      notes:
+        (values as any).notes === null ? null : ((values as any).notes ?? undefined),
+    });
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function deleteTenant(id: string): Promise<void> {
-  const { error } = await supabase.from("tenants").delete().eq("id", id);
-  boom(error);
+  try {
+    await convex.mutation((api as any).tenants.deleteTenant, { id });
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function getTenantPortalLink(tenantId: string): Promise<TenantUserLink | null> {
-  const { data, error } = await supabase
-    .from("tenant_users")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .maybeSingle();
-  boom(error);
-  return (data as TenantUserLink) ?? null;
+export async function getTenantPortalLink(
+  tenantId: string,
+): Promise<TenantUserLink | null> {
+  try {
+    const row = (await convex.query(
+      (api as any).tenants.getTenantPortalLink,
+      { tenantId },
+    )) as any;
+    return row ? { tenant_id: row.tenantId, user_id: row.userId } : null;
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function settleDeposit(
@@ -179,113 +430,174 @@ export async function settleDeposit(
   tenant: Tenant,
   deductions: { label: string; amount: number }[],
   refund: number,
-  notes: string | null
+  notes: string | null,
 ): Promise<DepositSettlement> {
-  const userId = (await supabase.auth.getUser()).data.user?.id ?? null;
-  const totalDeductions = deductions.reduce((s, d) => s + d.amount, 0);
-  const { data, error } = await supabase
-    .from("deposit_settlements")
-    .insert({
-      org_id: orgId,
-      tenant_id: tenant.id,
-      deposit_held: tenant.deposit_held,
+  try {
+    const row = (await convex.mutation((api as any).tenants.settleDeposit, {
+      orgId,
+      tenantId: tenant.id,
       deductions,
-      total_deductions: totalDeductions,
-      refund_amount: refund,
-      notes,
-      settled_by: userId,
-    })
-    .select("*")
-    .single();
-  boom(error);
-  await updateTenant(tenant.id, { status: "moved_out" });
-  return data as DepositSettlement;
+      refundAmount: refund,
+      notes: notes ?? undefined,
+    })) as any;
+    return toSettlement(row);
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function listSettlements(orgId: string): Promise<DepositSettlement[]> {
-  const { data, error } = await supabase
-    .from("deposit_settlements")
-    .select("*")
-    .eq("org_id", orgId)
-    .order("created_at", { ascending: false });
-  boom(error);
-  return (data ?? []) as DepositSettlement[];
+export async function listSettlements(
+  orgId: string,
+): Promise<DepositSettlement[]> {
+  try {
+    const rows = (await convex.query((api as any).tenants.listSettlements, {
+      orgId,
+    })) as any[];
+    return rows.map(toSettlement);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getSettlement(
+  id: string,
+): Promise<(DepositSettlement & { tenant: Tenant | null }) | null> {
+  try {
+    const row = (await convex.query((api as any).tenants.getSettlement, {
+      id,
+    })) as any;
+    if (!row) return null;
+    return {
+      ...toSettlement(row),
+      tenant: row.tenant
+        ? {
+            ...emptyTenant(row.tenant._id, row.orgId),
+            full_name: row.tenant.full_name,
+            phone: row.tenant.phone,
+          }
+        : null,
+    };
+  } catch (e) {
+    return err(e);
+  }
 }
 
 /** Prepaid credit held for a tenant (overpayments carried forward). */
 export async function getTenantCredit(tenantId: string): Promise<number> {
-  const { data, error } = await supabase
-    .from("tenant_credits")
-    .select("balance")
-    .eq("tenant_id", tenantId)
-    .maybeSingle();
-  boom(error);
-  return ((data as { balance?: number } | null)?.balance) ?? 0;
+  try {
+    return (await convex.query((api as any).tenants.getTenantCredit, {
+      tenantId,
+    })) as number;
+  } catch (e) {
+    return err(e);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Invoices
 // ---------------------------------------------------------------------------
-export async function listInvoices(orgId: string, month?: string): Promise<InvoiceWithRefs[]> {
-  let query = supabase
-    .from("invoices")
-    .select("*, tenant:tenants(id, full_name, phone), unit:units(label)")
-    .eq("org_id", orgId)
-    .order("due_date", { ascending: false });
-  if (month) query = query.eq("month", month);
-  const { data, error } = await query;
-  boom(error);
-  return (data ?? []) as unknown as InvoiceWithRefs[];
+export async function listInvoices(
+  orgId: string,
+  month?: string,
+): Promise<InvoiceWithRefs[]> {
+  try {
+    const rows = (await convex.query((api as any).invoices.listInvoices, {
+      orgId,
+      month,
+    })) as any[];
+    return rows.map(toInvoice);
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function listTenantInvoices(tenantId: string): Promise<InvoiceWithRefs[]> {
-  const { data, error } = await supabase
-    .from("invoices")
-    .select("*, unit:units(label)")
-    .eq("tenant_id", tenantId)
-    .order("month", { ascending: false });
-  boom(error);
-  return (data ?? []) as unknown as InvoiceWithRefs[];
+export async function listTenantInvoices(
+  tenantId: string,
+): Promise<InvoiceWithRefs[]> {
+  try {
+    const rows = (await convex.query(
+      (api as any).invoices.listTenantInvoices,
+      { tenantId },
+    )) as any[];
+    return rows.map(toInvoice);
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function generateInvoices(orgId: string, month: string): Promise<number> {
-  const { data, error } = await supabase.rpc("generate_monthly_invoices", {
-    p_org: orgId,
-    p_month: month,
-  });
-  boom(error);
-  return (data as number) ?? 0;
+export async function getInvoice(id: string): Promise<InvoiceWithRefs | null> {
+  try {
+    const row = (await convex.query((api as any).invoices.getInvoice, {
+      id,
+    })) as any;
+    return row ? toInvoice(row) : null;
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function updateInvoice(id: string, values: Partial<Invoice>): Promise<void> {
-  const { error } = await supabase.from("invoices").update(values).eq("id", id);
-  boom(error);
+export async function generateInvoices(
+  orgId: string,
+  month: string,
+): Promise<number> {
+  try {
+    return (await convex.mutation((api as any).invoices.generateInvoices, {
+      orgId,
+      month,
+    })) as number;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function updateInvoice(
+  id: string,
+  values: Partial<Invoice>,
+): Promise<void> {
+  try {
+    await convex.mutation((api as any).invoices.updateInvoice, {
+      id,
+      notes: (values as any).notes ?? undefined,
+      dueDate: (values as any).due_date,
+      total: values.total,
+      balance: values.balance,
+      status: values.status,
+    });
+  } catch (e) {
+    return err(e);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Payments
 // ---------------------------------------------------------------------------
-export async function listPayments(orgId: string, tenantId?: string): Promise<PaymentWithRefs[]> {
-  let query = supabase
-    .from("payments")
-    .select("*, tenant:tenants(id, full_name)")
-    .eq("org_id", orgId)
-    .order("paid_at", { ascending: false })
-    .limit(500);
-  if (tenantId) query = query.eq("tenant_id", tenantId);
-  const { data, error } = await query;
-  boom(error);
-  return (data ?? []) as unknown as PaymentWithRefs[];
+export async function listPayments(
+  orgId: string,
+  tenantId?: string,
+): Promise<PaymentWithRefs[]> {
+  try {
+    const rows = (await convex.query((api as any).payments.listPayments, {
+      orgId,
+      tenantId,
+    })) as any[];
+    return rows.map(toPayment);
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function listTenantPayments(tenantId: string): Promise<PaymentWithRefs[]> {
-  const { data, error } = await supabase
-    .from("payments")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .order("paid_at", { ascending: false });
-  boom(error);
-  return (data ?? []) as unknown as PaymentWithRefs[];
+export async function listTenantPayments(
+  tenantId: string,
+): Promise<PaymentWithRefs[]> {
+  try {
+    const rows = (await convex.query(
+      (api as any).payments.listTenantPayments,
+      { tenantId },
+    )) as any[];
+    return rows.map(toPayment);
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function recordManualPayment(args: {
@@ -297,143 +609,137 @@ export async function recordManualPayment(args: {
   paidAt: string;
   note: string | null;
 }): Promise<string> {
-  const { data, error } = await supabase.rpc("record_payment", {
-    p_org: args.orgId,
-    p_tenant: args.tenantId,
-    p_amount: args.amount,
-    p_method: args.method,
-    p_mpesa_code: args.mpesaCode,
-    p_paid_at: args.paidAt,
-    p_note: args.note,
-    p_recorded_by: (await supabase.auth.getUser()).data.user?.id ?? null,
-  });
-  boom(error);
-  return data as string;
-}
-
-export async function getPayment(id: string): Promise<PaymentWithRefs | null> {
-  const { data, error } = await supabase
-    .from("payments")
-    .select("*, tenant:tenants(id, full_name, phone, unit_id)")
-    .eq("id", id)
-    .maybeSingle();
-  boom(error);
-  return (data as unknown as PaymentWithRefs) ?? null;
-}
-
-// ---------------------------------------------------------------------------
-// M-Pesa STK (edge functions)
-// ---------------------------------------------------------------------------
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Invoke an edge function with one retry. Cold starts and transient network
- * blips surface as "Failed to send a request to the Edge Function" — a
- * single retry a few seconds later almost always succeeds.
- */
-async function invokeFn<T>(
-  name: string,
-  body: Record<string, unknown>,
-  retries = 1
-): Promise<T> {
-  let lastErr: unknown = null;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    if (attempt > 0) await sleep(2500);
-    try {
-      const { data, error } = await supabase.functions.invoke(name, { body });
-      if (error) {
-        // Function responded with an error payload — no point retrying 4xx.
-        throw new Error(error.message);
-      }
-      return data as T;
-    } catch (e) {
-      lastErr = e;
-      const msg = e instanceof Error ? e.message : String(e);
-      // Retry only network-level failures, not function logic errors.
-      if (!/failed to send a request|network|fetch|timeout|econn/i.test(msg)) throw e;
-    }
+  try {
+    return (await convex.mutation(
+      (api as any).payments.recordManualPayment,
+      {
+        orgId: args.orgId,
+        tenantId: args.tenantId,
+        amount: args.amount,
+        method: args.method,
+        mpesaCode: args.mpesaCode,
+        paidAt: new Date(args.paidAt).getTime(),
+        note: args.note,
+      },
+    )) as string;
+  } catch (e) {
+    return err(e);
   }
-  const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
-  throw new Error(
-    `Could not reach the ${name} service (${msg}). Check your connection and try again.`
-  );
 }
 
+export async function getPayment(
+  id: string,
+): Promise<PaymentWithRefs | null> {
+  try {
+    const row = (await convex.query((api as any).payments.getPayment, {
+      id,
+    })) as any;
+    return row ? toPayment(row) : null;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// M-Pesa STK (Convex actions)
+// ---------------------------------------------------------------------------
 export async function stkInitiate(args: {
   tenantId: string;
   phone: string;
   amount: number;
   idempotencyKey?: string;
 }): Promise<{ checkoutRequestId: string; deduplicated?: boolean }> {
-  return invokeFn("stk-initiate", args as Record<string, unknown>);
+  try {
+    return (await convex.action((api as any).mpesa.stkInitiate, {
+      tenantId: args.tenantId,
+      phone: args.phone,
+      amount: args.amount,
+      idempotencyKey: args.idempotencyKey,
+    })) as { checkoutRequestId: string; deduplicated?: boolean };
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function listTenantMpesaAttempts(tenantId: string): Promise<MpesaTransaction[]> {
-  const { data, error } = await supabase
-    .from("mpesa_transactions")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .order("created_at", { ascending: false })
-    .limit(10);
-  boom(error);
-  return (data ?? []) as MpesaTransaction[];
+export async function listTenantMpesaAttempts(
+  tenantId: string,
+): Promise<MpesaTransaction[]> {
+  try {
+    const rows = (await convex.query(
+      (api as any).mpesa.listTenantMpesaAttempts,
+      { tenantId },
+    )) as any[];
+    return rows.map(toTx);
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function stkStatus(
-  checkoutRequestId: string
+  checkoutRequestId: string,
 ): Promise<MpesaTransaction> {
-  // Poll path already retries on a timer — no extra retry here.
-  const { data, error } = await supabase.functions.invoke("stk-status", {
-    body: { checkoutRequestId },
-  });
-  if (error) throw new Error(error.message);
-  return data as MpesaTransaction;
+  try {
+    const row = (await convex.action((api as any).mpesa.stkStatus, {
+      checkoutRequestId,
+    })) as any;
+    return toTx(row);
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function listMpesaTransactions(orgId: string): Promise<MpesaTransaction[]> {
-  const { data, error } = await supabase
-    .from("mpesa_transactions")
-    .select("*")
-    .eq("org_id", orgId)
-    .order("created_at", { ascending: false })
-    .limit(100);
-  boom(error);
-  return (data ?? []) as MpesaTransaction[];
+export async function listMpesaTransactions(
+  orgId: string,
+): Promise<MpesaTransaction[]> {
+  try {
+    const rows = (await convex.query(
+      (api as any).mpesa.listMpesaTransactions,
+      { orgId },
+    )) as any[];
+    return rows.map(toTx);
+  } catch (e) {
+    return err(e);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Org / settings
 // ---------------------------------------------------------------------------
-export async function updateOrg(id: string, values: Partial<Org>): Promise<void> {
-  const { error } = await supabase.from("orgs").update(values).eq("id", id);
-  boom(error);
+export async function updateOrg(
+  id: string,
+  values: Partial<Org>,
+): Promise<void> {
+  try {
+    await convex.mutation((api as any).orgs.updateOrg, {
+      orgId: id,
+      name: values.name,
+      invoice_due_day: (values as any).invoice_due_day,
+      plan_code: (values as any).plan_code,
+      subscription_status: values.subscription_status,
+    });
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function createOrg(name: string, planCode: string): Promise<Org> {
-  const { data: user } = await supabase.auth.getUser();
-  if (!user.user) throw new Error("You must be signed in to create an organization.");
-  const profile = await supabase
-    .from("profiles")
-    .select("full_name")
-    .eq("id", user.user.id)
-    .maybeSingle();
-  const { data, error } = await supabase.rpc("create_org_with_owner", {
-    p_name: name,
-    p_plan_code: planCode,
-    p_full_name:
-      (profile.data as { full_name?: string } | null)?.full_name ??
-      (user.user.user_metadata?.full_name as string | undefined) ??
-      "",
-    p_phone: (user.user.user_metadata?.phone as string | undefined) ?? null,
-  });
-  boom(error);
-  return data as unknown as Org;
+  try {
+    const row = (await convex.mutation((api as any).orgs.createOrg, {
+      name,
+      planCode,
+    })) as any;
+    return toOrg(row);
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export interface InviteResult {
   email: string;
   tempPassword: string | null;
   invited: boolean;
+  /** Convex invite-link flow: share `/invite/<token>` with the invitee. */
+  inviteToken?: string;
 }
 
 export async function inviteUser(args: {
@@ -443,23 +749,67 @@ export async function inviteUser(args: {
   kind: "tenant" | "manager";
   tenantId?: string;
 }): Promise<InviteResult> {
-  return invokeFn("invite-user", args as Record<string, unknown>);
+  try {
+    return (await convex.action((api as any).invites.inviteUser, {
+      email: args.email,
+      fullName: args.fullName,
+      phone: args.phone,
+      kind: args.kind,
+      tenantId: args.tenantId,
+    })) as InviteResult;
+  } catch (e) {
+    return err(e);
+  }
 }
 
-export async function listStaff(orgId: string): Promise<{ user_id: string; role: string; name: string }[]> {
-  const { data, error } = await supabase.rpc("list_staff_members", {
-    p_org: orgId,
-  });
-  boom(error);
-  return ((data ?? []) as { user_id: string; role: string; full_name: string }[]).map((r) => ({
-    user_id: r.user_id,
-    role: r.role,
-    name: r.full_name || "(no profile)",
-  }));
+export async function getInvite(token: string): Promise<{
+  email: string;
+  fullName: string;
+  kind: "tenant" | "manager";
+  expired: boolean;
+  claimed: boolean;
+} | null> {
+  try {
+    return (await convex.query((api as any).invites.getInvite, {
+      token,
+    })) as {
+      email: string;
+      fullName: string;
+      kind: "tenant" | "manager";
+      expired: boolean;
+      claimed: boolean;
+    } | null;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function claimInvite(
+  token: string,
+): Promise<{ orgId: string; kind: string }> {
+  try {
+    return (await convex.action((api as any).invites.claimInvite, {
+      token,
+    })) as { orgId: string; kind: string };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function listStaff(
+  orgId: string,
+): Promise<{ user_id: string; role: string; name: string }[]> {
+  try {
+    return (await convex.query((api as any).orgs.listStaff, {
+      orgId,
+    })) as { user_id: string; role: string; name: string }[];
+  } catch (e) {
+    return err(e);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// M-Pesa credentials (via edge function; never direct DB access)
+// M-Pesa credentials (never expose secrets; view only)
 // ---------------------------------------------------------------------------
 export interface MpesaCredsView {
   configured: boolean;
@@ -468,7 +818,11 @@ export interface MpesaCredsView {
 }
 
 export async function getMpesaCreds(): Promise<MpesaCredsView> {
-  return invokeFn("mpesa-credentials", { action: "get" });
+  try {
+    return (await convex.query((api as any).mpesa.getMpesaCreds, {})) as MpesaCredsView;
+  } catch (e) {
+    return err(e);
+  }
 }
 
 export async function saveMpesaCreds(values: {
@@ -478,5 +832,22 @@ export async function saveMpesaCreds(values: {
   shortcode: string;
   passkey: string;
 }): Promise<void> {
-  await invokeFn<unknown>("mpesa-credentials", { action: "save", ...values });
+  try {
+    await convex.action((api as any).mpesa.saveMpesaCreds, values);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Full-org JSON backup for Settings → Export. */
+export async function exportOrgBackup(
+  orgId: string,
+): Promise<Record<string, unknown>> {
+  try {
+    return (await convex.query((api as any).export.exportOrg, {
+      orgId,
+    })) as Record<string, unknown>;
+  } catch (e) {
+    return err(e);
+  }
 }

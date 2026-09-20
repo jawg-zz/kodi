@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { PLANS, currentMonthKey, formatKES, planByCode } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
-import { supabase } from "../lib/supabase";
 import {
   countUnits,
   createProperty,
   createTenant,
   createUnit,
+  exportOrgBackup,
   generateInvoices,
   getMpesaCreds,
   inviteUser,
@@ -182,9 +182,9 @@ function StaffSection({ staff, isOwner }: { staff: { user_id: string; role: stri
     setResult(null);
     try {
       const r = await inviteUser({ email: email.trim(), fullName: fullName.trim(), phone: phone.trim(), kind: "manager" });
-      setResult(r.invited
-        ? `Manager login created for ${r.email}. Temporary password: ${r.tempPassword} — share it securely.`
-        : `Existing account ${r.email} linked as manager.`);
+      setResult(
+        `Invite created for ${r.email}. Share this link: ${window.location.origin}/invite/${r.inviteToken} — it expires in 7 days.`,
+      );
       setEmail("");
       setFullName("");
       setPhone("");
@@ -387,14 +387,8 @@ function DataSection() {
     setBusy(true);
     setError(null);
     try {
-      const tables = ["properties", "units", "tenants", "invoices", "payments", "deposit_settlements", "mpesa_transactions"] as const;
-      const dump: Record<string, unknown> = { org, exportedAt: new Date().toISOString() };
-      for (const t of tables) {
-        const { data, error: e } = await supabase.from(t).select("*").eq("org_id", org.id);
-        if (e) throw new Error(`${t}: ${e.message}`);
-        dump[t] = data;
-      }
-      const blob = new Blob([JSON.stringify(dump, null, 2)], { type: "application/json" });
+      const dump = await exportOrgBackup(org.id);
+      const blob = new Blob([JSON.stringify({ org, ...dump }, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

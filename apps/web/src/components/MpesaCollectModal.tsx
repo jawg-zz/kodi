@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { supabase } from "../lib/supabase";
-import { listTenantMpesaAttempts } from "../lib/api";
+import { listTenantMpesaAttempts, stkInitiate, stkStatus } from "../lib/api";
 import type { MpesaTransaction } from "../lib/types";
 import { Modal } from "./Modal";
 import { Button } from "./Button";
@@ -68,12 +67,8 @@ export function MpesaCollectModal({ tenantId, tenantName, defaultPhone, defaultA
     const timer = setInterval(async () => {
       polls += 1;
       try {
-        const { data, error: fnError } = await supabase.functions.invoke("stk-status", {
-          body: { checkoutRequestId: checkoutId },
-        });
+        const tx = await stkStatus(checkoutId);
         if (!alive) return;
-        if (fnError) throw new Error(fnError.message);
-        const tx = data as MpesaTransaction;
         if (tx.status === "success") {
           clearInterval(timer);
           setPhase("done");
@@ -126,16 +121,12 @@ export function MpesaCollectModal({ tenantId, tenantName, defaultPhone, defaultA
     sendingRef.current = true;
     try {
       setPhase("sending");
-      const { data, error: fnError } = await supabase.functions.invoke("stk-initiate", {
-        body: {
-          tenantId,
-          phone: normalized,
-          amount: value,
-          idempotencyKey: idempotencyKey(tenantId, normalized, value),
-        },
+      const res = await stkInitiate({
+        tenantId,
+        phone: normalized,
+        amount: value,
+        idempotencyKey: idempotencyKey(tenantId, normalized, value),
       });
-      if (fnError) throw new Error(fnError.message);
-      const res = data as { checkoutRequestId: string; deduplicated?: boolean };
       setCheckoutId(res.checkoutRequestId);
       setSecondsLeft(PIN_TIMEOUT_SECS);
       setPhase("waiting");

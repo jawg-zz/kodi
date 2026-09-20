@@ -2,20 +2,21 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
-  useState,
   type ReactNode,
 } from "react";
-import type { Session, User } from "@supabase/supabase-js";
-import { supabase } from "./supabase";
+import { useQuery } from "convex/react";
+import { useAuthActions, useConvexAuth } from "@convex-dev/auth/react";
+import { api } from "../../../../convex/_generated/api";
 import type { Org, OrgMember, Profile, Tenant } from "./types";
 
 type Role = "staff" | "tenant" | null;
 
 interface AuthState {
   loading: boolean;
-  session: Session | null;
-  user: User | null;
+  /** Convex Auth: true when a session exists. Replaces Supabase Session. */
+  isAuthenticated: boolean;
+  session: { userId: string } | null;
+  user: { id: string } | null;
   role: Role;
   profile: Profile | null;
   org: Org | null;
@@ -27,7 +28,7 @@ interface AuthState {
     email: string,
     password: string,
     fullName: string,
-    phone: string
+    phone: string,
   ) => Promise<{ error: string | null; needsConfirmation: boolean }>;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -36,142 +37,119 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [loading, setLoading] = useState(true);
-  const [session, setSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [org, setOrg] = useState<Org | null>(null);
-  const [membership, setMembership] = useState<OrgMember | null>(null);
-  const [tenant, setTenant] = useState<Tenant | null>(null);
+  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
+  const { signIn: convexSignIn, signOut: convexSignOut } = useAuthActions();
+  const myOrg = useQuery(api.orgs.myOrg, isAuthenticated ? {} : "skip");
 
-  const loadUserData = useCallback(async (userId: string) => {
-    // Profile (upsert so first login creates it)
-    const existing = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", userId)
-      .maybeSingle();
-    if (existing.data) {
-      setProfile(existing.data as Profile);
-    } else {
-      const created = await supabase
-        .from("profiles")
-        .insert({ id: userId, full_name: "" })
-        .select("*")
-        .maybeSingle();
-      setProfile((created.data as Profile) ?? null);
-    }
-
-    // Staff membership
-    const m = await supabase
-      .from("org_members")
-      .select("*, org:orgs(*)")
-      .eq("user_id", userId)
-      .maybeSingle();
-    if (m.data) {
-      setMembership({
-        org_id: (m.data as { org_id: string }).org_id,
-        user_id: userId,
-        role: (m.data as { role: OrgMember["role"] }).role,
-      });
-      setOrg((m.data as { org: Org }).org);
-    } else {
-      setMembership(null);
-      setOrg(null);
-    }
-
-    // Tenant portal link. The embedded tenant may come back as an object
-    // (to-one) or a one-element array depending on the PostgREST version —
-    // accept both so tenant logins are never misread as "no tenant".
-    const t = await supabase
-      .from("tenant_users")
-      .select("tenant:tenants(*)")
-      .eq("user_id", userId)
-      .maybeSingle();
-    const linked = (t.data as unknown as { tenant?: Tenant | Tenant[] | null } | null)?.tenant;
-    setTenant(Array.isArray(linked) ? (linked[0] ?? null) : (linked ?? null));
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (!alive) return;
-      setSession(data.session);
-      if (data.session?.user) await loadUserData(data.session.user.id);
-      if (alive) setLoading(false);
-    });
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      if (!alive) return;
-      setSession(newSession);
-      if (newSession?.user) void loadUserData(newSession.user.id);
-      else {
-        setProfile(null);
-        setOrg(null);
-        setMembership(null);
-        setTenant(null);
+  const signIn = useCallback(
+    async (email: string, password: string) => {
+      try {
+        await convexSignIn("password", {
+          email: email.trim().toLowerCase(),
+          password,
+          flow: "signIn",
+        });
+        return null;
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
       }
-    });
-    return () => {
-      alive = false;
-      subscription.unsubscribe();
-    };
-  }, [loadUserData]);
-
-  const signIn = useCallback(async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return error ? error.message : null;
-  }, []);
+    },
+    [convexSignIn],
+  );
 
   const signUp = useCallback(
-    async (email: string, password: string, fullName: string, phone: string) => {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: { full_name: fullName, phone },
-          // Confirmation links must land on the deployed app, not localhost.
-          emailRedirectTo: `${window.location.origin}/login`,
-        },
-      });
-      if (error) return { error: error.message, needsConfirmation: false };
-      if (data.user) {
-        // Best-effort: RLS may hide the profiles row until a session exists.
-        try {
-          await supabase
-            .from("profiles")
-            .upsert({ id: data.user.id, full_name: fullName, phone });
-        } catch {
-          // create_org_with_owner backfills the profile at onboarding.
-        }
-        try {
-          await loadUserData(data.user.id);
-        } catch {
-          // Tables are unreadable pre-confirmation; onboarding reloads.
-        }
+    async (
+      email: string,
+      password: string,
+      fullName: string,
+      phone: string,
+    ) => {
+      try {
+        await convexSignIn("password", {
+          email: email.trim().toLowerCase(),
+          password,
+          name: fullName,
+          phone,
+          flow: "signUp",
+        });
+        // Convex Auth Password has no email-confirmation step by default.
+        return { error: null, needsConfirmation: false };
+      } catch (e) {
+        return {
+          error: e instanceof Error ? e.message : String(e),
+          needsConfirmation: false,
+        };
       }
-      // If email confirmation is on, session is null until they confirm.
-      return { error: null, needsConfirmation: !data.session };
     },
-    [loadUserData]
+    [convexSignIn],
   );
 
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
-  }, []);
+    await convexSignOut();
+  }, [convexSignOut]);
 
-  const refresh = useCallback(async () => {
-    if (session?.user) await loadUserData(session.user.id);
-  }, [session, loadUserData]);
+  // Reactive query re-runs on writes — nothing to reload manually.
+  const refresh = useCallback(async () => {}, []);
 
-  const role: Role = membership ? "staff" : tenant ? "tenant" : session ? null : null;
+  const loading = authLoading || (isAuthenticated && myOrg === undefined);
+
+  const org: Org | null =
+    myOrg?.org === undefined || myOrg?.org === null
+      ? null
+      : {
+          id: myOrg.org._id,
+          name: myOrg.org.name,
+          plan_code: myOrg.org.plan_code as Org["plan_code"],
+          subscription_status: myOrg.org.subscription_status,
+          subscription_period_end:
+            myOrg.org.subscription_period_end ?? null,
+          invoice_due_day: myOrg.org.invoice_due_day,
+          created_at: new Date(myOrg.org._creationTime).toISOString(),
+        };
+
+  const membership: OrgMember | null =
+    myOrg && myOrg.role !== "tenant"
+      ? { org_id: myOrg.org._id, user_id: "", role: myOrg.role }
+      : null;
+
+  const profile: Profile | null =
+    myOrg?.profile === undefined || myOrg?.profile === null
+      ? null
+      : {
+          id: "",
+          full_name: myOrg.profile.full_name,
+          phone: myOrg.profile.phone ?? null,
+        };
+
+  const tenant: Tenant | null =
+    myOrg?.tenant === undefined || myOrg?.tenant === null
+      ? null
+      : {
+          id: myOrg.tenant._id,
+          org_id: myOrg.tenant.orgId,
+          full_name: myOrg.tenant.full_name,
+          phone: myOrg.tenant.phone,
+          national_id: myOrg.tenant.national_id,
+          unit_id: myOrg.tenant.unitId ?? null,
+          move_in_date: myOrg.tenant.move_in_date ?? null,
+          deposit_held: myOrg.tenant.deposit_held,
+          status: myOrg.tenant.status,
+          notes: myOrg.tenant.notes ?? null,
+        };
+
+  const role: Role = membership
+    ? "staff"
+    : tenant
+      ? "tenant"
+      : null;
 
   return (
     <AuthContext.Provider
       value={{
         loading,
-        session,
-        user: session?.user ?? null,
+        isAuthenticated,
+        session: isAuthenticated ? { userId: "" } : null,
+        user: isAuthenticated ? { id: "" } : null,
         role,
         profile,
         org,
