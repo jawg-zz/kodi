@@ -1,10 +1,6 @@
 import { ConvexError, v } from "convex/values";
-import {
-  action,
-  internalMutation,
-  mutation,
-  query,
-} from "./_generated/server";
+import { action, mutation, query } from "./_generated/server";
+import type { ActionCtx, MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
@@ -14,31 +10,8 @@ import {
   normalizePhone,
   stkPassword,
 } from "./lib/auth";
-
-const txStatus = v.union(
-  v.literal("pending"),
-  v.literal("success"),
-  v.literal("failed"),
-  v.literal("timeout"),
-);
-
-const txShape = v.object({
-  _id: v.id("mpesaTransactions"),
-  _creationTime: v.number(),
-  orgId: v.id("orgs"),
-  tenantId: v.id("tenants"),
-  checkoutRequestId: v.string(),
-  merchantRequestId: v.optional(v.string()),
-  phone: v.string(),
-  amount: v.number(),
-  status: txStatus,
-  resultCode: v.optional(v.number()),
-  resultDesc: v.optional(v.string()),
-  mpesaReceipt: v.optional(v.string()),
-  paymentId: v.optional(v.id("payments")),
-  initiatedBy: v.optional(v.string()),
-  idempotencyKey: v.optional(v.string()),
-});
+import { encryptSecret } from "./lib/mpesaCrypto";
+import { txShape } from "./mpesaInternal";
 
 const SANDBOX = "https://sandbox.safaricom.co.ke";
 const PROD = "https://api.safaricom.co.ke";
@@ -93,95 +66,17 @@ export const getMpesaCreds = query({
       .withIndex("by_org", (q) => q.eq("orgId", caller.orgId))
       .first();
     if (row === null || !row.consumerKeyEnc) {
-      return { configured: false, environment: "sandbox" as const, shortcode: "" };
+      return {
+        configured: false,
+        environment: "sandbox" as const,
+        shortcode: "",
+      };
     }
     return {
       configured: true,
       environment: row.environment,
       shortcode: row.shortcode,
     };
-  },
-});
-
-/** Internal: fetch tx by CheckoutRequestID for actions / HTTP. */
-export const getTxByCheckoutInternal = internalMutation({
-  args: { checkoutRequestId: v.string() },
-  returns: v.union(txShape, v.null()),
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("mpesaTransactions")
-      .withIndex("by_checkout", (q) =>
-        q.eq("checkoutRequestId", args.checkoutRequestId),
-      )
-      .first();
-  },
-});
-
-// ---------------------------------------------------------------------------
-// Credential encryption (AES-GCM, key from CREDENTIALS_KEY env).
-// Mirrors supabase/functions/_shared/mod.ts.
-// ---------------------------------------------------------------------------
-
-async function credKey(): Promise<CryptoKey> {
-  const raw = process.env.CREDENTIALS_KEY ?? "";
-  if (!raw) throw new ConvexError("CREDENTIALS_KEY env var is not configured");
-  const bytes = new TextEncoder().encode(raw.padEnd(32, "0").slice(0, 32));
-  return await crypto.subtle.importKey("raw", bytes, "AES-GCM", false, [
-    "encrypt",
-    "decrypt",
-  ]);
-}
-
-async function encryptSecret(plain: string): Promise<string> {
-  const key = await credKey();
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    new TextEncoder().encode(plain),
-  );
-  const buf = new Uint8Array(12 + ct.byteLength);
-  buf.set(iv, 0);
-  buf.set(new Uint8Array(ct), 12);
-  let s = "";
-  for (const b of buf) s += String.fromCharCode(b);
-  return btoa(s);
-}
-
-async function decryptSecret(stored: string): Promise<string> {
-  const key = await credKey();
-  const bin = atob(stored);
-  const raw = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
-  const pt = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: raw.slice(0, 12) },
-    key,
-    raw.slice(12),
-  );
-  return new TextDecoder().decode(pt);
-}
-
-export const storeCredsInternal = internalMutation({
-  args: {
-    orgId: v.id("orgs"),
-    environment: v.union(v.literal("sandbox"), v.literal("production")),
-    consumerKeyEnc: v.string(),
-    consumerSecretEnc: v.string(),
-    shortcode: v.string(),
-    passkeyEnc: v.string(),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const existing = await ctx.db
-      .query("mpesaCredentials")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .first();
-    if (existing === null) {
-      await ctx.db.insert("mpesaCredentials", args);
-    } else {
-      await ctx.db.patch(existing._id, args);
-    }
-    return null;
   },
 });
 
@@ -215,7 +110,7 @@ export const saveMpesaCreds = action({
       encryptSecret(consumerSecret),
       encryptSecret(passkey),
     ]);
-    await ctx.runMutation(internal.mpesa.storeCredsInternal, {
+    await ctx.runMutation(internal.mpesaInternal.storeCreds, {
       orgId: caller.orgId,
       environment: args.environment,
       consumerKeyEnc,
@@ -224,120 +119,6 @@ export const saveMpesaCreds = action({
       passkeyEnc,
     });
     return null;
-  },
-});
-
-/** Internal: read decrypted creds inside actions only (never to clients). */
-export const getDecryptedCredsInternal = internalMutation({
-  args: { orgId: v.id("orgs") },
-  returns: v.union(
-    v.object({
-      environment: v.union(v.literal("sandbox"), v.literal("production")),
-      consumerKey: v.string(),
-      consumerSecret: v.string(),
-      shortcode: v.string(),
-      passkey: v.string(),
-    }),
-    v.null(),
-  ),
-  handler: async (ctx, args) => {
-    const row = await ctx.db
-      .query("mpesaCredentials")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .first();
-    if (row === null || !row.consumerKeyEnc) return null;
-    const [consumerKey, consumerSecret, passkey] = await Promise.all([
-      decryptSecret(row.consumerKeyEnc),
-      decryptSecret(row.consumerSecretEnc),
-      decryptSecret(row.passkeyEnc),
-    ]);
-    return {
-      environment: row.environment,
-      consumerKey,
-      consumerSecret,
-      shortcode: row.shortcode,
-      passkey,
-    };
-  },
-});
-
-export const insertTxInternal = internalMutation({
-  args: {
-    orgId: v.id("orgs"),
-    tenantId: v.id("tenants"),
-    checkoutRequestId: v.string(),
-    merchantRequestId: v.optional(v.string()),
-    phone: v.string(),
-    amount: v.number(),
-    initiatedBy: v.optional(v.string()),
-    idempotencyKey: v.optional(v.string()),
-  },
-  returns: v.id("mpesaTransactions"),
-  handler: async (ctx, args) => {
-    return await ctx.db.insert("mpesaTransactions", { ...args, status: "pending" });
-  },
-});
-
-export const updateTxInternal = internalMutation({
-  args: {
-    checkoutRequestId: v.string(),
-    status: v.optional(txStatus),
-    resultCode: v.optional(v.union(v.number(), v.null())),
-    resultDesc: v.optional(v.union(v.string(), v.null())),
-    mpesaReceipt: v.optional(v.union(v.string(), v.null())),
-    paymentId: v.optional(v.id("payments")),
-  },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const tx = await ctx.db
-      .query("mpesaTransactions")
-      .withIndex("by_checkout", (q) =>
-        q.eq("checkoutRequestId", args.checkoutRequestId),
-      )
-      .first();
-    if (tx === null) return null;
-    const patch: Record<string, unknown> = {};
-    if (args.status !== undefined) patch.status = args.status;
-    if (args.resultCode !== undefined) {
-      patch.resultCode = args.resultCode ?? undefined;
-    }
-    if (args.resultDesc !== undefined) {
-      patch.resultDesc = args.resultDesc ?? undefined;
-    }
-    if (args.mpesaReceipt !== undefined) {
-      patch.mpesaReceipt = args.mpesaReceipt ?? undefined;
-    }
-    if (args.paymentId !== undefined) patch.paymentId = args.paymentId;
-    if (Object.keys(patch).length > 0) {
-      await ctx.db.patch(tx._id, patch as never);
-    }
-    return null;
-  },
-});
-
-/** 30-minute sweep of stale pendings (cron + every stk-status poll). */
-export const expirePendingInternal = internalMutation({
-  args: {},
-  returns: v.number(),
-  handler: async (ctx) => {
-    const cutoff = Date.now() - 30 * 60_000;
-    const pendings = await ctx.db
-      .query("mpesaTransactions")
-      .withIndex("by_status", (q) => q.eq("status", "pending"))
-      .collect();
-    let count = 0;
-    for (const tx of pendings) {
-      if (tx._creationTime < cutoff) {
-        await ctx.db.patch(tx._id, {
-          status: "timeout",
-          resultDesc:
-            tx.resultDesc ??
-            "No confirmation received within 30 minutes.",
-        });
-        count += 1;
-      }
-    }
-    return count;
   },
 });
 
@@ -350,10 +131,13 @@ async function darajaToken(
   key: string,
   secret: string,
 ): Promise<string> {
-  const res = await fetch(`${base}/oauth/v1/generate?grant_type=client_credentials`, {
-    headers: { Authorization: "Basic " + btoa(`${key}:${secret}`) },
-    signal: AbortSignal.timeout(20_000),
-  });
+  const res = await fetch(
+    `${base}/oauth/v1/generate?grant_type=client_credentials`,
+    {
+      headers: { Authorization: "Basic " + btoa(`${key}:${secret}`) },
+      signal: AbortSignal.timeout(20_000),
+    },
+  );
   if (!res.ok) {
     throw new ConvexError(
       `Daraja OAuth failed (${res.status}) — check consumer key/secret`,
@@ -373,6 +157,24 @@ type ActionCaller = {
   tenantId: Id<"tenants"> | null;
 };
 
+type TxDoc = {
+  _id: Id<"mpesaTransactions">;
+  _creationTime: number;
+  orgId: Id<"orgs">;
+  tenantId: Id<"tenants">;
+  checkoutRequestId: string;
+  merchantRequestId?: string;
+  phone: string;
+  amount: number;
+  status: "pending" | "success" | "failed" | "timeout";
+  resultCode?: number;
+  resultDesc?: string;
+  mpesaReceipt?: string;
+  paymentId?: Id<"payments">;
+  initiatedBy?: string;
+  idempotencyKey?: string;
+};
+
 /** Staff or self-tenant STK initiate. */
 export const stkInitiate = action({
   args: {
@@ -385,7 +187,15 @@ export const stkInitiate = action({
     checkoutRequestId: v.string(),
     deduplicated: v.optional(v.boolean()),
   }),
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx: ActionCtx,
+    args: {
+      tenantId: Id<"tenants">;
+      phone: string;
+      amount: number;
+      idempotencyKey?: string;
+    },
+  ): Promise<{ checkoutRequestId: string; deduplicated?: boolean }> => {
     const caller: ActionCaller = await ctx.runQuery(
       internal.helpers.assertCaller,
       {},
@@ -424,7 +234,7 @@ export const stkInitiate = action({
       }
     }
     const creds = await ctx.runMutation(
-      internal.mpesa.getDecryptedCredsInternal,
+      internal.mpesaInternal.getDecryptedCreds,
       { orgId: caller.orgId },
     );
     if (creds === null) {
@@ -432,14 +242,21 @@ export const stkInitiate = action({
         "M-Pesa is not configured for this business. Add Daraja credentials in Settings.",
       );
     }
-    const callbackBase = (process.env.MPESA_CALLBACK_URL ?? "").replace(/\/$/, "");
+    const callbackBase = (process.env.MPESA_CALLBACK_URL ?? "").replace(
+      /\/$/,
+      "",
+    );
     if (!callbackBase) {
       throw new ConvexError(
         "M-Pesa callbacks are not configured — set MPESA_CALLBACK_URL env var to <convex-site-url>/mpesa-callback",
       );
     }
     const base = creds.environment === "production" ? PROD : SANDBOX;
-    const token = await darajaToken(base, creds.consumerKey, creds.consumerSecret);
+    const token = await darajaToken(
+      base,
+      creds.consumerKey,
+      creds.consumerSecret,
+    );
     const timestamp = darajaTimestamp();
     const stkRes = await fetch(`${base}/mpesa/stkpush/v1/processrequest`, {
       method: "POST",
@@ -473,7 +290,7 @@ export const stkInitiate = action({
         stk.ResponseDescription ?? "STK Push was rejected by Daraja",
       );
     }
-    await ctx.runMutation(internal.mpesa.insertTxInternal, {
+    await ctx.runMutation(internal.mpesaInternal.insertTx, {
       orgId: caller.orgId,
       tenantId: args.tenantId,
       checkoutRequestId: stk.CheckoutRequestID,
@@ -491,12 +308,15 @@ export const stkInitiate = action({
 export const stkStatus = action({
   args: { checkoutRequestId: v.string() },
   returns: txShape,
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx: ActionCtx,
+    args: { checkoutRequestId: string },
+  ): Promise<TxDoc> => {
     const caller: ActionCaller = await ctx.runQuery(
       internal.helpers.assertCaller,
       {},
     );
-    const tx = await ctx.runMutation(internal.mpesa.getTxByCheckoutInternal, {
+    const tx = await ctx.runMutation(internal.mpesaInternal.getTxByCheckout, {
       checkoutRequestId: args.checkoutRequestId,
     });
     if (tx === null || tx.orgId !== caller.orgId) {
@@ -505,22 +325,27 @@ export const stkStatus = action({
     if (caller.role === "tenant" && caller.tenantId !== tx.tenantId) {
       throw new ConvexError("Transaction not found");
     }
-    await ctx.runMutation(internal.mpesa.expirePendingInternal, {});
-    const fresh = await ctx.runMutation(internal.mpesa.getTxByCheckoutInternal, {
-      checkoutRequestId: args.checkoutRequestId,
-    });
+    await ctx.runMutation(internal.mpesaInternal.expirePending, {});
+    const fresh = await ctx.runMutation(
+      internal.mpesaInternal.getTxByCheckout,
+      { checkoutRequestId: args.checkoutRequestId },
+    );
     if (fresh === null || fresh.status !== "pending") {
       if (fresh === null) throw new ConvexError("Transaction not found");
       return fresh;
     }
     const creds = await ctx.runMutation(
-      internal.mpesa.getDecryptedCredsInternal,
+      internal.mpesaInternal.getDecryptedCreds,
       { orgId: caller.orgId },
     );
     if (creds === null) return fresh;
     try {
       const base = creds.environment === "production" ? PROD : SANDBOX;
-      const token = await darajaToken(base, creds.consumerKey, creds.consumerSecret);
+      const token = await darajaToken(
+        base,
+        creds.consumerKey,
+        creds.consumerSecret,
+      );
       const timestamp = darajaTimestamp();
       const q = await fetch(`${base}/mpesa/stkpushquery/v1/query`, {
         method: "POST",
@@ -553,7 +378,7 @@ export const stkStatus = action({
               paidAt: Date.now(),
             },
           );
-          await ctx.runMutation(internal.mpesa.updateTxInternal, {
+          await ctx.runMutation(internal.mpesaInternal.updateTx, {
             checkoutRequestId: tx.checkoutRequestId,
             status: "success",
             resultCode: 0,
@@ -562,21 +387,21 @@ export const stkStatus = action({
           });
         }
       } else if (code === "1032") {
-        await ctx.runMutation(internal.mpesa.updateTxInternal, {
+        await ctx.runMutation(internal.mpesaInternal.updateTx, {
           checkoutRequestId: tx.checkoutRequestId,
           status: "failed",
           resultCode: 1032,
           resultDesc: data.ResultDesc,
         });
       } else if (code === "1037") {
-        await ctx.runMutation(internal.mpesa.updateTxInternal, {
+        await ctx.runMutation(internal.mpesaInternal.updateTx, {
           checkoutRequestId: tx.checkoutRequestId,
           status: "timeout",
           resultCode: 1037,
           resultDesc: data.ResultDesc,
         });
       } else if (code && code !== "0") {
-        await ctx.runMutation(internal.mpesa.updateTxInternal, {
+        await ctx.runMutation(internal.mpesaInternal.updateTx, {
           checkoutRequestId: tx.checkoutRequestId,
           resultCode: Number(code) || undefined,
           resultDesc: data.ResultDesc,
@@ -585,9 +410,10 @@ export const stkStatus = action({
     } catch {
       // Daraja unreachable — return cached row; frontend keeps polling.
     }
-    const latest = await ctx.runMutation(internal.mpesa.getTxByCheckoutInternal, {
-      checkoutRequestId: args.checkoutRequestId,
-    });
+    const latest = await ctx.runMutation(
+      internal.mpesaInternal.getTxByCheckout,
+      { checkoutRequestId: args.checkoutRequestId },
+    );
     if (latest === null) throw new ConvexError("Transaction not found");
     return latest;
   },
@@ -596,10 +422,8 @@ export const stkStatus = action({
 export const expirePendingTransactions = mutation({
   args: {},
   returns: v.number(),
-  handler: async (ctx) => {
+  handler: async (ctx: MutationCtx): Promise<number> => {
     await assertStaff(ctx);
-    return await ctx.runMutation(internal.mpesa.expirePendingInternal, {});
+    return await ctx.runMutation(internal.mpesaInternal.expirePending, {});
   },
 });
-
-export { txStatus };

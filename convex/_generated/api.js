@@ -2,12 +2,22 @@
 /**
  * Generated `api` utility.
  *
- * TEMPORARY SHIM — hand-written to unblock the frontend migration while the
- * Convex deployment binary downloads. The next successful `npx convex dev`
- * overwrites this directory with real codegen. Do not edit by hand beyond
- * keeping the module list in sync with convex/*.ts.
+ * THIS CODE IS AUTOMATICALLY GENERATED.
+ *
+ * To regenerate, run `npx convex dev`.
+ * @module
  */
-import { anyApi } from "convex/server";
 
+import { anyApi, componentsGeneric } from "convex/server";
+
+/**
+ * A utility for referencing Convex functions in your app's API.
+ *
+ * Usage:
+ * ```js
+ * const myFunctionReference = api.myModule.myFunction;
+ * ```
+ */
 export const api = anyApi;
 export const internal = anyApi;
+export const components = componentsGeneric();

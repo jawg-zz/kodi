@@ -51,6 +51,10 @@ npx convex run seed:seedPlans   # seed Starter/Growth/Pro (idempotent)
 npx convex env set CREDENTIALS_KEY "$(openssl rand -hex 32)"
 # After first deploy, point Daraja callbacks here:
 npx convex env set MPESA_CALLBACK_URL "<your-convex-site-url>/mpesa-callback"
+# NOTE: some self-hosted setups serve HTTP actions under /http
+# (e.g. https://convexapi.spidmax.win/http/mpesa-callback) — probe
+# OPTIONS <host>/http/mpesa-callback (expect 200) vs <host>/mpesa-callback
+# and set MPESA_CALLBACK_URL to whichever answers.
 ```
 
 Auth is Convex Auth email+password (no email server needed). Tenant isolation

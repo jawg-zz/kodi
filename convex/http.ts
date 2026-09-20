@@ -67,7 +67,7 @@ http.route({
     if (cb.CheckoutRequestID.length > 128) {
       return json({ error: "Bad CheckoutRequestID" }, 400);
     }
-    const tx = await ctx.runMutation(internal.mpesa.getTxByCheckoutInternal, {
+    const tx = await ctx.runMutation(internal.mpesaInternal.getTxByCheckout, {
       checkoutRequestId: cb.CheckoutRequestID,
     });
     if (tx === null) {
@@ -101,7 +101,7 @@ http.route({
             paidAt: Date.now(),
           },
         );
-        await ctx.runMutation(internal.mpesa.updateTxInternal, {
+        await ctx.runMutation(internal.mpesaInternal.updateTx, {
           checkoutRequestId: cb.CheckoutRequestID,
           status: "success",
           resultCode: code,
@@ -111,7 +111,7 @@ http.route({
         });
         return json({ ok: true, paymentId });
       } catch (e) {
-        await ctx.runMutation(internal.mpesa.updateTxInternal, {
+        await ctx.runMutation(internal.mpesaInternal.updateTx, {
           checkoutRequestId: cb.CheckoutRequestID,
           status: "failed",
           resultCode: code,
@@ -128,7 +128,7 @@ http.route({
     }
 
     const status = code === 1032 ? "failed" : code === 1037 ? "timeout" : "failed";
-    await ctx.runMutation(internal.mpesa.updateTxInternal, {
+    await ctx.runMutation(internal.mpesaInternal.updateTx, {
       checkoutRequestId: cb.CheckoutRequestID,
       status,
       resultCode: code,

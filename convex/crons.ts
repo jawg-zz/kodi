@@ -7,7 +7,7 @@ const crons = cronJobs();
 crons.interval(
   "expire pending mpesa transactions",
   { minutes: 30 },
-  internal.mpesa.expirePendingInternal,
+  internal.mpesaInternal.expirePending,
   {},
 );
 
