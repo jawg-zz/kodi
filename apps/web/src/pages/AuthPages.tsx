@@ -134,8 +134,8 @@ export function SignupPage() {
             <Field label="Email" required>
               <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
             </Field>
-            <Field label="Password" required hint="At least 6 characters.">
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} autoComplete="new-password" />
+            <Field label="Password" required hint="At least 8 characters.">
+              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} autoComplete="new-password" />
             </Field>
             {error && <ErrorBanner message={error} />}
             <Button type="submit" disabled={busy} className="w-full">
