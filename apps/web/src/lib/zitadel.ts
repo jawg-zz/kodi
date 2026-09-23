@@ -2,9 +2,24 @@ import { UserManager, WebStorageStateStore, type User } from "oidc-client-ts";
 
 const issuer = import.meta.env.VITE_ZITADEL_ISSUER as string | undefined;
 const clientId = import.meta.env.VITE_ZITADEL_CLIENT_ID as string | undefined;
+const rawAppUrl = (
+  import.meta.env.VITE_APP_URL as string | undefined
+)?.trim();
+/** Absolute web origin for OIDC redirects. Never a bare path. */
 const appUrl =
-  (import.meta.env.VITE_APP_URL as string | undefined)?.replace(/\/$/, "") ??
-  window.location.origin;
+  rawAppUrl !== undefined && rawAppUrl !== ""
+    ? rawAppUrl.replace(/\/$/, "")
+    : window.location.origin;
+
+if (!/^https?:\/\//.test(appUrl)) {
+  console.error(
+    `VITE_APP_URL must be an absolute origin (https://...), got ${JSON.stringify(rawAppUrl)}. Falling back to window.location.origin.`,
+  );
+}
+
+const safeAppUrl = /^https?:\/\//.test(appUrl)
+  ? appUrl
+  : window.location.origin;
 
 if (!issuer || !clientId) {
   console.error(
@@ -26,9 +41,9 @@ export const zitadelConfigured = Boolean(issuer && clientId);
 export const userManager = new UserManager({
   authority: issuer ?? "https://placeholder.invalid",
   client_id: clientId ?? "placeholder",
-  redirect_uri: `${appUrl}/auth/callback`,
-  silent_redirect_uri: `${appUrl}/auth/silent-renew`,
-  post_logout_redirect_uri: `${appUrl}/`,
+  redirect_uri: `${safeAppUrl}/auth/callback`,
+  silent_redirect_uri: `${safeAppUrl}/auth/silent-renew`,
+  post_logout_redirect_uri: `${safeAppUrl}/`,
   response_type: "code",
   scope: "openid profile email",
   loadUserInfo: true,
