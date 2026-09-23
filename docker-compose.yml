@@ -1,6 +1,9 @@
 # Kodi on Dokploy (compose service, source: repo ./docker-compose.yml).
 # The web image is built server-side by Dokploy; VITE_* values come from
 # build args set in the Dokploy dashboard (mirrored from env below).
+# Dokploy note: every VITE_* arg must ALSO be added as a build arg in the
+# Dokploy dashboard for the web service — dashboard env vars alone are NOT
+# baked into the Vite bundle (Vite inlines them at build time).
 name: kodi
 
 services:
@@ -10,4 +13,7 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         VITE_CONVEX_URL: ${VITE_CONVEX_URL:?VITE_CONVEX_URL is required}
+        VITE_ZITADEL_ISSUER: ${VITE_ZITADEL_ISSUER:?VITE_ZITADEL_ISSUER is required}
+        VITE_ZITADEL_CLIENT_ID: ${VITE_ZITADEL_CLIENT_ID:?VITE_ZITADEL_CLIENT_ID is required}
+        VITE_APP_URL: ${VITE_APP_URL:-}
     restart: unless-stopped
