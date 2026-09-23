@@ -1,17 +1,19 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { authTables } from "@convex-dev/auth/server";
 
 /**
  * Kodi on Convex — rent-management SaaS (Kenya).
  *
  * Ported from Supabase Postgres: all money is integer whole KES,
- * month keys are "YYYY-MM", user references are Convex Auth subject
- * strings (not v.id()), enforced at function boundaries in code
+ * month keys are "YYYY-MM", user references are Zitadel subject strings
+ * (identity.subject, not v.id()), enforced at function boundaries in code
  * (no RLS — auth lives in convex/lib/auth.ts).
+ *
+ * Auth history: Convex Auth Password + authTables until Sept 2026, then a
+ * hard cutover to Zitadel OIDC wiped the auth tables. Old subject-keyed
+ * app rows were orphaned; everyone re-registered.
  */
 export default defineSchema({
-  ...authTables,
 
   plans: defineTable({
     code: v.string(),

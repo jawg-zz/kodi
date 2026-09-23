@@ -132,19 +132,11 @@ export const createOrg = mutation({
     const fullName = (args.fullName ?? "").trim();
     const phone = (args.phone ?? "").trim() || undefined;
     if (profile === null) {
-      // Fall back to the auth account's name/phone (captured at signup).
-      const account = await ctx.db.get("users", identity.subject as never);
-      const authName =
-        fullName ||
-        ((account as unknown as { name?: string } | null)?.name ?? "");
-      const authPhone =
-        phone ??
-        (account as unknown as { phone?: string } | null)?.phone ??
-        undefined;
+      // Name/phone come from the onboarding form (Zitadel holds the email).
       await ctx.db.insert("profiles", {
         userId,
-        full_name: authName,
-        phone: authPhone,
+        full_name: fullName,
+        phone: phone,
       });
     } else {
       await ctx.db.patch(profile._id, {

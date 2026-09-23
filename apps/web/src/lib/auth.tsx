@@ -2,18 +2,27 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
+  useState,
   type ReactNode,
 } from "react";
 import { useQuery } from "convex/react";
-import { useAuthActions, useConvexAuth } from "@convex-dev/auth/react";
+import type { User } from "oidc-client-ts";
 import { api } from "../../../../convex/_generated/api";
+import {
+  getAccessToken,
+  signInRedirect,
+  signUpRedirect,
+  userManager,
+  zitadelConfigured,
+} from "./zitadel";
 import type { Org, OrgMember, Profile, Tenant } from "./types";
 
 type Role = "staff" | "tenant" | null;
 
 interface AuthState {
   loading: boolean;
-  /** Convex Auth: true when a session exists. Replaces Supabase Session. */
+  /** True when a non-expired Zitadel session exists. */
   isAuthenticated: boolean;
   session: { userId: string } | null;
   user: { id: string } | null;
@@ -23,7 +32,7 @@ interface AuthState {
   membership: OrgMember | null;
   /** For tenant portal users: their tenant row (which carries org_id). */
   tenant: Tenant | null;
-  signIn: (email: string, password: string) => Promise<string | null>;
+  signIn: () => Promise<void>;
   signUp: (
     email: string,
     password: string,
@@ -37,61 +46,65 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
-  const { signIn: convexSignIn, signOut: convexSignOut } = useAuthActions();
+  const [oidcUser, setOidcUser] = useState<User | null>(null);
+  const [oidcLoading, setOidcLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    userManager
+      .getUser()
+      .then((u) => {
+        if (!cancelled) setOidcUser(u && !u.expired ? u : null);
+      })
+      .catch(() => {
+        if (!cancelled) setOidcUser(null);
+      })
+      .finally(() => {
+        if (!cancelled) setOidcLoading(false);
+      });
+    const onLoaded = (u: User) => setOidcUser(u && !u.expired ? u : null);
+    const onUnloaded = () => setOidcUser(null);
+    userManager.events.addUserLoaded(onLoaded);
+    userManager.events.addUserUnloaded(onUnloaded);
+    userManager.events.addAccessTokenExpired(() => setOidcUser(null));
+    return () => {
+      cancelled = true;
+      userManager.events.removeUserLoaded(onLoaded);
+      userManager.events.removeUserUnloaded(onUnloaded);
+    };
+  }, []);
+
+  const isAuthenticated = oidcUser !== null;
   const myOrg = useQuery(api.orgs.myOrg, isAuthenticated ? {} : "skip");
 
-  const signIn = useCallback(
-    async (email: string, password: string) => {
-      try {
-        await convexSignIn("password", {
-          email: email.trim().toLowerCase(),
-          password,
-          flow: "signIn",
-        });
-        return null;
-      } catch (e) {
-        return e instanceof Error ? e.message : String(e);
-      }
-    },
-    [convexSignIn],
-  );
+  const signIn = useCallback(async () => {
+    await signInRedirect(window.location.pathname);
+  }, []);
 
-  const signUp = useCallback(
-    async (
-      email: string,
-      password: string,
-      fullName: string,
-      phone: string,
-    ) => {
-      try {
-        await convexSignIn("password", {
-          email: email.trim().toLowerCase(),
-          password,
-          name: fullName,
-          phone,
-          flow: "signUp",
-        });
-        // Convex Auth Password has no email-confirmation step by default.
-        return { error: null, needsConfirmation: false };
-      } catch (e) {
-        return {
-          error: e instanceof Error ? e.message : String(e),
-          needsConfirmation: false,
-        };
-      }
-    },
-    [convexSignIn],
-  );
+  // Kept for AuthPages' signature: name/phone are collected at onboarding
+  // (createOrg args), not at Zitadel registration.
+  const signUp = useCallback(async () => {
+    await signUpRedirect();
+    return { error: null, needsConfirmation: false };
+  }, []);
 
   const signOut = useCallback(async () => {
-    await convexSignOut();
-  }, [convexSignOut]);
+    try {
+      await userManager.signoutRedirect();
+    } catch {
+      await userManager.removeUser();
+      setOidcUser(null);
+      window.location.assign("/");
+    }
+  }, []);
 
   // Reactive query re-runs on writes — nothing to reload manually.
   const refresh = useCallback(async () => {}, []);
 
-  const loading = authLoading || (isAuthenticated && myOrg === undefined);
+  const loading =
+    !zitadelConfigured ||
+    oidcLoading ||
+    (isAuthenticated && myOrg === undefined);
 
   const org: Org | null =
     myOrg?.org === undefined || myOrg?.org === null
@@ -171,3 +184,6 @@ export function useAuth(): AuthState {
   if (!ctx) throw new Error("useAuth must be used inside <AuthProvider>");
   return ctx;
 }
+
+/** Exposed for convex.setAuth wiring in main.tsx. */
+export { getAccessToken };

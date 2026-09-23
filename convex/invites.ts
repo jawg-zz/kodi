@@ -5,10 +5,9 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
 /**
- * Invite-link flow. Convex Auth has no admin-create-user API (unlike
- * Supabase auth.admin), so staff create an invite record with a random
- * token; the invitee signs up with email+password, then claims the token,
- * which links them as manager or tenant portal user.
+ * Invite-link flow. Staff create an invite record with a random token; the
+ * invitee registers via Zitadel with the invited email, then claims the
+ * token, which links them as manager or tenant portal user.
  *
  * Writes live in invitesInternal.ts (avoids same-module circular refs).
  */
@@ -80,11 +79,13 @@ export const claimInvite = action({
     args: { token: string },
   ): Promise<{ orgId: Id<"orgs">; kind: string }> => {
     // Any authenticated user may claim (invite token is the capability).
+    // The invite email must match the verified Zitadel email.
     const identity = await ctx.auth.getUserIdentity();
     if (identity === null) throw new ConvexError("Not authenticated");
     return await ctx.runMutation(internal.invitesInternal.claimInvite, {
       token: args.token,
       userId: identity.subject,
+      email: identity.email,
     });
   },
 });

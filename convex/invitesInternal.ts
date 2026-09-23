@@ -81,7 +81,7 @@ export const createInvite = internalMutation({
 });
 
 export const claimInvite = internalMutation({
-  args: { token: v.string(), userId: v.string() },
+  args: { token: v.string(), userId: v.string(), email: v.optional(v.string()) },
   returns: v.object({ orgId: v.id("orgs"), kind: v.string() }),
   handler: async (ctx, args) => {
     const invite = await ctx.db
@@ -94,6 +94,12 @@ export const claimInvite = internalMutation({
     }
     if (invite.claimedBy !== undefined) {
       throw new ConvexError("This invite was already used");
+    }
+    if (
+      args.email !== undefined &&
+      args.email.trim().toLowerCase() !== invite.email
+    ) {
+      throw new ConvexError("This invite was sent to a different email address");
     }
     if (invite.kind === "manager") {
       const existing = await ctx.db

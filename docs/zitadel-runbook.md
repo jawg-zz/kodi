@@ -60,7 +60,7 @@ base (non-TLS) services and map a domain to Zitadel's port 8080.
    no client secret:
    - Redirect URIs (adjust to the real web origin):
      - `https://<kodi-web-origin>/auth/callback` (required)
-     - `https://<kodi-web-origin>/silent-renew.html` (recommended)
+     - `https://<kodi-web-origin>/auth/silent-renew` (required — silent renew)
    - Post-logout redirect URIs: `https://<kodi-web-origin>/`
    - Scopes: `openid profile email` (+ `offline_access` if refresh tokens wanted).
    - Grant types: authorization code + refresh token.

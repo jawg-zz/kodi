@@ -1,17 +1,21 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { claimInvite, getInvite } from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { stashReturnTo } from "../lib/zitadel";
 import { PublicLayout } from "../components/Layout";
 import { Button } from "../components/Button";
 import { Card, CardBody, ErrorBanner, Loading } from "../components/ui";
 
 /**
- * Invite-link landing: the invitee signs up (or signs in) first, then
- * claims the token to join the business as manager or tenant.
+ * Invite-link landing: the invitee registers via Zitadel with the invited
+ * email first, then claims the token to join the business as manager or
+ * tenant. The token survives the OIDC round-trip via returnTo storage.
  */
 export function InvitePage() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
+  const { isAuthenticated, loading: authLoading, signIn } = useAuth();
   const [invite, setInvite] = useState<{
     email: string;
     fullName: string;
@@ -47,7 +51,12 @@ export function InvitePage() {
     }
   };
 
-  if (loading) {
+  const goSignIn = async () => {
+    if (token) stashReturnTo(`/invite/${token}`);
+    await signIn();
+  };
+
+  if (loading || authLoading) {
     return (
       <PublicLayout>
         <Loading label="Checking invite…" />
@@ -73,20 +82,19 @@ export function InvitePage() {
                 {invite.kind === "manager" ? "manager" : "tenant"}.
               </p>
               <p className="mt-3 text-sm text-slate-600">
-                First{" "}
-                <Link to="/signup" className="font-medium text-brand-600 hover:underline">
-                  create your account
-                </Link>{" "}
-                or{" "}
-                <Link to="/login" className="font-medium text-brand-600 hover:underline">
-                  sign in
-                </Link>
-                , then come back here and accept the invite.
+                Register with the invited email address, then come back here
+                and accept the invite.
               </p>
               {error && <ErrorBanner message={error} />}
-              <Button onClick={claim} disabled={busy} className="mt-4 w-full">
-                {busy ? "Joining…" : "Accept invite"}
-              </Button>
+              {isAuthenticated ? (
+                <Button onClick={claim} disabled={busy} className="mt-4 w-full">
+                  {busy ? "Joining…" : "Accept invite"}
+                </Button>
+              ) : (
+                <Button onClick={goSignIn} className="mt-4 w-full">
+                  Sign in to accept
+                </Button>
+              )}
             </>
           )}
         </CardBody>

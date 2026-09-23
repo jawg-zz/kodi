@@ -1,26 +1,26 @@
 /**
- * Backend JWT verification config.
+ * Backend JWT verification config — Zitadel OIDC (self-hosted).
  *
- * The Convex Auth library mints ID tokens with iss = CONVEX_SITE_URL
- * ("https://convex.spidmax.win", confirmed via the live
- * /http/.well-known/openid-configuration) and aud = "convex". The issuer
- * below must match the token's iss exactly.
+ * Identity: https://auth.spidmax.win (verified live: standard OIDC
+ * discovery, RS256 JWKS with kid at /oauth/v2/keys).
  *
- * Self-hosted routing on this deployment (verified live):
- * - API host serves functions: https://convexapi.spidmax.win (port 3210)
- * - Site host serves HTTP actions + JWKS + OAuth:
- *   https://convex.spidmax.win (port 3211)
- * - Dashboard host (convexdash.spidmax.win, port 6791) serves NO api/jwks
- *   routes — never point issuer/jwks at it.
+ * Convex verifies the access token's iss/aud/signature against this and
+ * exposes it as ctx.auth.getUserIdentity(). Only identity.subject is
+ * consumed (see convex/lib/auth.ts); email/name come from the profile and
+ * invite flows, not the token.
+ *
+ * Hard cutover from Convex Auth Password (Sept 2026): the old provider,
+ * authTables, and HTTP routes are gone. Old subject-keyed rows are orphaned;
+ * everyone re-registers in Zitadel.
  */
 export default {
   providers: [
     {
       type: "customJwt",
-      issuer: "https://convex.spidmax.win",
-      jwks: "https://convex.spidmax.win/.well-known/jwks.json",
+      issuer: "https://auth.spidmax.win",
+      jwks: "https://auth.spidmax.win/oauth/v2/keys",
       algorithm: "RS256",
-      applicationID: "convex",
+      applicationID: "392096213291302915",
     },
   ],
 };
