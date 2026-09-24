@@ -9,10 +9,3 @@ apps/web/.env.local
 *.local
 .vercel
 .netlify
-supabase/.branches
-supabase/.temp
-tools/.pgdata/
-
-.vercel
-tools/.fn*.json
-"tools/.*"

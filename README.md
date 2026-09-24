@@ -7,7 +7,7 @@ portal. Printable A4 invoices, receipts, statements, and deposit settlements;
 collection reports with CSV export.
 
 Backend: **Convex** (typed database + server functions + auth + cron + HTTP),
-frontend: Vite + React + TypeScript + Tailwind v4 SPA with Convex Auth.
+frontend: Vite + React + TypeScript + Tailwind v4 SPA with Zitadel OIDC.
 
 ## Repo layout
 
@@ -19,7 +19,7 @@ kodi/
 │   │                       invoices, payments, credit ledger, M-Pesa, invites)
 │   ├── lib/auth.ts         caller resolution + org guards + Daraja helpers
 │   ├── orgs|properties|tenants|invoices|payments|mpesa|invites|export.ts
-│   ├── auth.ts             Convex Auth (email+password)
+│   ├── auth.config.ts      Zitadel OIDC (customJwt: issuer + JWKS + app id)
 │   ├── http.ts             public POST /mpesa-callback (Safaricom webhook)
 │   ├── crons.ts            30-min stale-pending sweep
 │   └── seed.ts             platform plans seed
@@ -31,10 +31,7 @@ kodi/
 │                           invoices, payments, portal, reports, settings, print docs
 ├── packages/shared/        dependency-free TS: KES money, KE phones, months,
 │                           FIFO allocation, CSV (+ 35 vitest tests)
-├── supabase/               legacy Supabase backend (retained for reference;
-│                           the app no longer reads it — see convex/ instead)
-├── tools/                  dev-only Postgres verification harness (legacy)
-├── vercel.json / netlify.toml
+├── docs/                   Zitadel provisioning runbook
 ```
 
 ## Prerequisites
@@ -57,8 +54,9 @@ npx convex env set MPESA_CALLBACK_URL "<your-convex-site-url>/mpesa-callback"
 # and set MPESA_CALLBACK_URL to whichever answers.
 ```
 
-Auth is Convex Auth email+password (no email server needed). Tenant isolation
-lives in `convex/lib/auth.ts` — every function resolves the caller to staff
+Auth is Zitadel OIDC (hosted sign-in pages, PKCE SPA client; the frontend
+sends the ID token to Convex, verified against `convex/auth.config.ts`).
+Tenant isolation lives in `convex/lib/auth.ts` — every function resolves the caller to staff
 (`orgMembers`) or tenant (`tenantUsers`) and guards the org boundary in plain
 TypeScript. Money movement mirrors the old `record_payment()` semantics:
 atomic receipt numbering (RCP-NNNN) + FIFO allocation across open invoices +
