@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { internalMutation } from "./_generated/server";
+import { decryptSecret } from "./lib/mpesaCrypto";
 
 /**
  * Internal M-Pesa row helpers. Split out of mpesa.ts so the public actions
@@ -117,7 +118,6 @@ export const getDecryptedCreds = internalMutation({
     v.null(),
   ),
   handler: async (ctx, args) => {
-    const { decryptSecret } = await import("./lib/mpesaCrypto");
     const row = await ctx.db
       .query("mpesaCredentials")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
