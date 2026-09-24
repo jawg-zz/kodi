@@ -173,6 +173,7 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_tenant", ["tenantId"])
+    .index("by_org_paidAt", ["orgId", "paidAt"])
     .index("by_org_code", ["orgId", "mpesaCode"]),
 
   mpesaTransactions: defineTable({

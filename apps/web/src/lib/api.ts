@@ -1,13 +1,19 @@
 import { convex } from "./convex";
 import { api } from "../../../../convex/_generated/api";
 import type {
+  ArrearsAging,
+  CollectionMonth,
   DepositSettlement,
+  DepositsAndCredits,
   Invoice,
   InvoiceWithRefs,
+  MpesaHealth,
   MpesaTransaction,
   Org,
+  PaymentsBreakdown,
   PaymentWithRefs,
   Property,
+  RentRoll,
   Tenant,
   TenantUserLink,
   Unit,
@@ -847,6 +853,222 @@ export async function exportOrgBackup(
     return (await convex.query((api as any).export.exportOrg, {
       orgId,
     })) as Record<string, unknown>;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reports (server-aggregated)
+// ---------------------------------------------------------------------------
+function toCollectionMonth(r: any): CollectionMonth {
+  return {
+    month: r.month,
+    expected: r.expected,
+    collected: r.collected,
+    outstanding: r.outstanding,
+    rate: r.rate,
+    invoice_count: r.invoiceCount,
+  };
+}
+
+function toArrearsAging(r: any): ArrearsAging {
+  return {
+    rows: (r.rows ?? []).map((x: any) => ({
+      tenant_id: x.tenantId,
+      tenant_name: x.tenantName,
+      phone: x.phone,
+      property_id: x.propertyId ?? null,
+      property_name: x.propertyName,
+      balance: x.balance,
+      open_count: x.openCount,
+      oldest_month: x.oldestMonth,
+      oldest_due_date: x.oldestDueDate,
+      bucket: x.bucket,
+    })),
+    buckets: r.buckets ?? [],
+    total_balance: r.totalBalance,
+    tenants_in_arrears: r.tenantsInArrears,
+  };
+}
+
+function toPaymentsBreakdown(r: any): PaymentsBreakdown {
+  return {
+    by_method: (r.byMethod ?? []).map((x: any) => ({
+      method: x.method,
+      total: x.total,
+      count: x.count,
+    })),
+    total: r.total,
+    count: r.count,
+    rows: (r.rows ?? []).map((x: any) => ({
+      receipt_no: x.receiptNo,
+      paid_at: x.paidAt,
+      tenant_name: x.tenantName,
+      method: x.method,
+      mpesa_code: x.mpesaCode ?? null,
+      amount: x.amount,
+      note: x.note ?? null,
+    })),
+    truncated: r.truncated,
+  };
+}
+
+function toMpesaHealth(r: any): MpesaHealth {
+  return {
+    by_status: (r.byStatus ?? []).map((x: any) => ({
+      status: x.status,
+      count: x.count,
+      amount: x.amount,
+    })),
+    total: r.total,
+    total_amount: r.totalAmount,
+    success_rate: r.successRate,
+  };
+}
+
+function toRentRoll(r: any): RentRoll {
+  return {
+    rows: (r.rows ?? []).map((x: any) => ({
+      property_id: x.propertyId,
+      property_name: x.propertyName,
+      units: x.units,
+      occupied: x.occupied,
+      vacant: x.vacant,
+      notice: x.notice,
+      occupancy_pct: x.occupancyPct,
+      monthly_rent: x.monthlyRent,
+      occupied_rent: x.occupiedRent,
+    })),
+    totals: {
+      units: r.totals.units,
+      occupied: r.totals.occupied,
+      vacant: r.totals.vacant,
+      occupancy_pct: r.totals.occupancyPct,
+      monthly_rent: r.totals.monthlyRent,
+      occupied_rent: r.totals.occupiedRent,
+    },
+  };
+}
+
+function toDepositsAndCredits(r: any): DepositsAndCredits {
+  return {
+    deposit_held_total: r.depositHeldTotal,
+    tenants_holding_deposit: r.tenantsHoldingDeposit,
+    settled_deductions: r.settledDeductions,
+    settled_refunds: r.settledRefunds,
+    settlements_count: r.settlementsCount,
+    credit_balance_total: r.creditBalanceTotal,
+    tenants_with_credit: r.tenantsWithCredit,
+  };
+}
+
+const reportsArgs = (orgId: string, extra: Record<string, unknown> = {}) => ({
+  orgId,
+  ...Object.fromEntries(
+    Object.entries(extra).filter(([, v]) => v !== undefined && v !== "all"),
+  ),
+});
+
+export async function getCollectionSummary(args: {
+  orgId: string;
+  startMonth: string;
+  endMonth: string;
+  propertyId?: string;
+}): Promise<CollectionMonth[]> {
+  try {
+    const rows = (await convex.query(
+      (api as any).reports.collectionSummary,
+      reportsArgs(args.orgId, {
+        startMonth: args.startMonth,
+        endMonth: args.endMonth,
+        propertyId: args.propertyId,
+      }),
+    )) as any[];
+    return rows.map(toCollectionMonth);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getArrearsAging(args: {
+  orgId: string;
+  propertyId?: string;
+}): Promise<ArrearsAging> {
+  try {
+    const row = (await convex.query(
+      (api as any).reports.arrearsAging,
+      reportsArgs(args.orgId, { propertyId: args.propertyId }),
+    )) as any;
+    return toArrearsAging(row);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getPaymentsBreakdown(args: {
+  orgId: string;
+  startMs: number;
+  endMs: number;
+  propertyId?: string;
+}): Promise<PaymentsBreakdown> {
+  try {
+    const row = (await convex.query(
+      (api as any).reports.paymentsBreakdown,
+      reportsArgs(args.orgId, {
+        startMs: args.startMs,
+        endMs: args.endMs,
+        propertyId: args.propertyId,
+      }),
+    )) as any;
+    return toPaymentsBreakdown(row);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getMpesaHealth(args: {
+  orgId: string;
+  startMs: number;
+  endMs: number;
+}): Promise<MpesaHealth> {
+  try {
+    const row = (await convex.query((api as any).reports.mpesaHealth, {
+      orgId: args.orgId,
+      startMs: args.startMs,
+      endMs: args.endMs,
+    })) as any;
+    return toMpesaHealth(row);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getRentRoll(args: {
+  orgId: string;
+  propertyId?: string;
+}): Promise<RentRoll> {
+  try {
+    const row = (await convex.query(
+      (api as any).reports.rentRoll,
+      reportsArgs(args.orgId, { propertyId: args.propertyId }),
+    )) as any;
+    return toRentRoll(row);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getDepositsAndCredits(args: {
+  orgId: string;
+  propertyId?: string;
+}): Promise<DepositsAndCredits> {
+  try {
+    const row = (await convex.query(
+      (api as any).reports.depositsAndCredits,
+      reportsArgs(args.orgId, { propertyId: args.propertyId }),
+    )) as any;
+    return toDepositsAndCredits(row);
   } catch (e) {
     return err(e);
   }

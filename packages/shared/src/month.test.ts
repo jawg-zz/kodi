@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   addMonths,
+  agingBucket,
   currentMonthKey,
+  daysPastDue,
   dueDateFor,
   formatDate,
   isMonthKey,
   monthKey,
+  monthKeyFromMs,
   monthLabel,
   monthRange,
+  monthRangeList,
+  monthStartMs,
 } from "./month";
 
 describe("monthKey / isMonthKey", () => {
@@ -68,5 +73,41 @@ describe("monthRange", () => {
 describe("formatDate", () => {
   it("formats ISO strings", () => {
     expect(formatDate("2026-09-05T00:00:00.000Z")).toMatch(/5 Sep 2026/);
+  });
+});
+
+describe("monthRangeList / monthKeyFromMs / monthStartMs", () => {
+  it("lists inclusive months across a year boundary", () => {
+    expect(monthRangeList("2025-11", "2026-02")).toEqual([
+      "2025-11",
+      "2025-12",
+      "2026-01",
+      "2026-02",
+    ]);
+    expect(monthRangeList("2026-09", "2026-09")).toEqual(["2026-09"]);
+  });
+
+  it("rejects invalid ranges", () => {
+    expect(() => monthRangeList("sept", "2026-09")).toThrow();
+  });
+
+  it("maps ms epochs to UTC month keys", () => {
+    expect(monthKeyFromMs(Date.UTC(2026, 8, 14, 12))).toBe("2026-09");
+    expect(monthStartMs("2026-09")).toBe(Date.UTC(2026, 8, 1));
+  });
+});
+
+describe("daysPastDue / agingBucket", () => {
+  const now = Date.UTC(2026, 8, 24);
+  it("buckets arrears by age", () => {
+    expect(agingBucket(daysPastDue("2026-09-20", now))).toBe("Current");
+    expect(agingBucket(daysPastDue("2026-08-10", now))).toBe("30+");
+    expect(agingBucket(daysPastDue("2026-07-10", now))).toBe("60+");
+    expect(agingBucket(daysPastDue("2026-05-01", now))).toBe("90+");
+    expect(agingBucket(daysPastDue("2026-10-05", now))).toBe("Current");
+  });
+
+  it("treats bad dates as current", () => {
+    expect(daysPastDue("not-a-date", now)).toBe(0);
   });
 });

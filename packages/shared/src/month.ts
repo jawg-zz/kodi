@@ -52,6 +52,46 @@ export function monthRange(key: string): { start: string; end: string } {
   return { start: d.toISOString(), end: end.toISOString() };
 }
 
+/** Inclusive list of month keys from start to end (both "YYYY-MM"). Caps at 37 entries. */
+export function monthRangeList(start: string, end: string): string[] {
+  if (!isMonthKey(start) || !isMonthKey(end)) throw new Error(`Invalid month range: ${start}..${end}`);
+  const out: string[] = [];
+  let cur = start;
+  while (cur <= end && out.length < 37) {
+    out.push(cur);
+    if (cur === end) break;
+    cur = addMonths(cur, 1);
+  }
+  return out;
+}
+
+/** UTC "YYYY-MM" for a ms-epoch timestamp (avoids local-timezone drift). */
+export function monthKeyFromMs(ms: number): string {
+  return monthKey(new Date(ms));
+}
+
+/** Start-of-month UTC epoch ms for a month key. */
+export function monthStartMs(key: string): number {
+  return parseMonthKey(key).getTime();
+}
+
+/** Whole days between dueDate "YYYY-MM-DD" (UTC midnight) and nowMs. Negative = not yet due. */
+export function daysPastDue(dueDate: string, nowMs: number): number {
+  const due = Date.parse(`${dueDate}T00:00:00Z`);
+  if (Number.isNaN(due)) return 0;
+  return Math.floor((nowMs - due) / 86_400_000);
+}
+
+export type AgingBucket = "Current" | "30+" | "60+" | "90+";
+
+/** Arrears aging bucket from days past due. */
+export function agingBucket(days: number): AgingBucket {
+  if (days >= 90) return "90+";
+  if (days >= 60) return "60+";
+  if (days >= 30) return "30+";
+  return "Current";
+}
+
 const MONTH_SHORT = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",

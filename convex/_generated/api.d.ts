@@ -22,6 +22,7 @@ import type * as mpesaInternal from "../mpesaInternal.js";
 import type * as orgs from "../orgs.js";
 import type * as payments from "../payments.js";
 import type * as properties from "../properties.js";
+import type * as reports from "../reports.js";
 import type * as seed from "../seed.js";
 import type * as tenants from "../tenants.js";
 
@@ -46,6 +47,7 @@ declare const fullApi: ApiFromModules<{
   orgs: typeof orgs;
   payments: typeof payments;
   properties: typeof properties;
+  reports: typeof reports;
   seed: typeof seed;
   tenants: typeof tenants;
 }>;
