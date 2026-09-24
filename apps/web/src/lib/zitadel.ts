@@ -30,6 +30,24 @@ if (!issuer || !clientId) {
 
 const RETURN_TO_KEY = "kodi:returnTo";
 
+/**
+ * Auth-only pages are never valid post-login landing spots. Without this,
+ * signing in FROM /login stashes "/login" as the return target, so a
+ * successful Zitadel round-trip drops the user right back on the sign-in
+ * page — looking exactly like a failed/looping login.
+ */
+const AUTH_PAGES = new Set([
+  "/login",
+  "/signup",
+  "/auth/callback",
+  "/auth/silent-renew",
+]);
+
+function sanitizeReturnTo(path: string): string {
+  if (!path.startsWith("/") || AUTH_PAGES.has(path)) return "/";
+  return path;
+}
+
 export const zitadelConfigured = Boolean(issuer && clientId);
 
 /**
@@ -54,7 +72,7 @@ export const userManager = new UserManager({
 /** Remember where to land after the Zitadel round-trip (e.g. /invite/<token>). */
 export function stashReturnTo(path: string): void {
   try {
-    window.sessionStorage.setItem(RETURN_TO_KEY, path);
+    window.sessionStorage.setItem(RETURN_TO_KEY, sanitizeReturnTo(path));
   } catch {
     /* storage unavailable — fall back to home */
   }
@@ -64,7 +82,7 @@ export function takeReturnTo(): string {
   try {
     const v = window.sessionStorage.getItem(RETURN_TO_KEY) ?? "/";
     window.sessionStorage.removeItem(RETURN_TO_KEY);
-    return v.startsWith("/") ? v : "/";
+    return sanitizeReturnTo(v);
   } catch {
     return "/";
   }

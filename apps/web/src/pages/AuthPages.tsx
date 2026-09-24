@@ -1,16 +1,27 @@
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { PublicLayout } from "../components/Layout";
 import { Button } from "../components/Button";
-import { Card, CardBody } from "../components/ui";
+import { Card, CardBody, Loading } from "../components/ui";
 
 /**
  * Sign-in lives on Zitadel-hosted pages. These screens explain the handoff
- * and preserve invite links across the round-trip.
+ * and preserve invite links across the round-trip. An already-signed-in
+ * user landing here (back button, stale link) goes home — HomeRedirect
+ * sorts out onboarding / app / portal.
  */
 export function LoginPage() {
-  const { signIn } = useAuth();
+  const { signIn, loading, isAuthenticated } = useAuth();
   const navigate = useNavigate();
+
+  if (!loading && isAuthenticated) return <Navigate to="/" replace />;
+  if (loading) {
+    return (
+      <PublicLayout>
+        <Loading label="Checking your session…" />
+      </PublicLayout>
+    );
+  }
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,7 +61,16 @@ export function LoginPage() {
 }
 
 export function SignupPage() {
-  const { signUp } = useAuth();
+  const { signUp, loading, isAuthenticated } = useAuth();
+
+  if (!loading && isAuthenticated) return <Navigate to="/" replace />;
+  if (loading) {
+    return (
+      <PublicLayout>
+        <Loading label="Checking your session…" />
+      </PublicLayout>
+    );
+  }
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
