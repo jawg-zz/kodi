@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ConvexProvider } from "convex/react";
 import "./index.css";
@@ -23,10 +23,28 @@ function ConfigError() {
   );
 }
 
-/** Handles OIDC redirects: full login at /auth/callback, silent renew in iframe. */
+/**
+ * Handles OIDC redirects: full login at /auth/callback, silent renew in
+ * iframe. Guards against double-processing (StrictMode) and against running
+ * with no auth response (direct navigation / stale Zitadel session bounce),
+ * both of which previously left users stranded on a reloading sign-in page.
+ */
 function AuthCallback({ mode }: { mode: "login" | "silent" }) {
   const [error, setError] = useState<string | null>(null);
+  const started = useRef(false);
   useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    if (
+      mode === "login" &&
+      !window.location.search.includes("code=") &&
+      !window.location.search.includes("error=")
+    ) {
+      // Landed here without an auth response (e.g. logged-out Zitadel
+      // session bounced back, or stale redirect). Don't loop — go home.
+      window.location.replace("/");
+      return;
+    }
     const done =
       mode === "login"
         ? userManager.signinRedirectCallback().then(() => {
@@ -41,7 +59,12 @@ function AuthCallback({ mode }: { mode: "login" | "silent" }) {
   return (
     <div className="mx-auto max-w-md p-10">
       {error ? (
-        <p className="text-sm text-red-600">Sign-in failed: {error}</p>
+        <div className="text-sm">
+          <p className="text-red-600">Sign-in failed: {error}</p>
+          <a href="/" className="mt-2 inline-block font-medium text-brand-600 hover:underline">
+            Back to home
+          </a>
+        </div>
       ) : (
         <Loading label="Finishing sign-in…" />
       )}
@@ -51,7 +74,7 @@ function AuthCallback({ mode }: { mode: "login" | "silent" }) {
 
 const ready = convexConfigured && zitadelConfigured;
 
-// Feed the Convex client the current Zitadel access token; re-resolves on
+// Feed the Convex client the current Zitadel ID token; re-resolves on
 // every request so silent renews take effect without a reload.
 if (ready) {
   convex.setAuth(getAccessToken);
