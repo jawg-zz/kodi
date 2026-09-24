@@ -52,7 +52,8 @@ export const zitadelConfigured = Boolean(issuer && clientId);
 
 /**
  * OIDC client for Zitadel (public SPA client, PKCE, no secret).
- * Tokens live in sessionStorage so closing the tab signs out.
+ * Tokens live in localStorage so all tabs share one session (print views
+ * open in a new tab via target="_blank" and must stay signed in).
  * Silent renew uses a same-origin popup-free redirect URI handled by the
  * SPA router (/silent-renew path renders nothing and closes the flow).
  */
@@ -66,7 +67,7 @@ export const userManager = new UserManager({
   scope: "openid profile email",
   loadUserInfo: true,
   automaticSilentRenew: true,
-  userStore: new WebStorageStateStore({ store: window.sessionStorage }),
+  userStore: new WebStorageStateStore({ store: window.localStorage }),
 });
 
 /** Remember where to land after the Zitadel round-trip (e.g. /invite/<token>). */
