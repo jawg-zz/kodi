@@ -70,12 +70,17 @@ export function takeReturnTo(): string {
   }
 }
 
-/** Access token for Convex setAuth — null when signed out/expired. */
+/**
+ * Token for Convex setAuth. Convex verifies the ID token (aud = client id,
+ * stable per login); the access token's aud is the API/project resource and
+ * would fail applicationID verification. Falls back to access token if the
+ * ID token is missing/expired.
+ */
 export async function getAccessToken(): Promise<string | null> {
   try {
     const user: User | null = await userManager.getUser();
     if (!user || user.expired) return null;
-    return user.access_token;
+    return user.id_token ?? user.access_token;
   } catch {
     return null;
   }
