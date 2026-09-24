@@ -20,7 +20,7 @@ export default {
       issuer: "https://auth.spidmax.win",
       jwks: "https://auth.spidmax.win/oauth/v2/keys",
       algorithm: "RS256",
-      applicationID: "392096213291302915",
+      applicationID: "392106184494088195",
     },
   ],
 };
