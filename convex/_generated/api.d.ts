@@ -8,7 +8,6 @@
  * @module
  */
 
-import type * as auth from "../auth.js";
 import type * as crons from "../crons.js";
 import type * as export_ from "../export.js";
 import type * as helpers from "../helpers.js";
@@ -33,7 +32,6 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  auth: typeof auth;
   crons: typeof crons;
   export: typeof export_;
   helpers: typeof helpers;
