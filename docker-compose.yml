@@ -13,7 +13,7 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         VITE_CONVEX_URL: ${VITE_CONVEX_URL:?VITE_CONVEX_URL is required}
-        VITE_ZITADEL_ISSUER: ${VITE_ZITADEL_ISSUER:?VITE_ZITADEL_ISSUER is required}
-        VITE_ZITADEL_CLIENT_ID: ${VITE_ZITADEL_CLIENT_ID:?VITE_ZITADEL_CLIENT_ID is required}
+        VITE_LOGTO_ISSUER: ${VITE_LOGTO_ISSUER:?VITE_LOGTO_ISSUER is required}
+        VITE_LOGTO_APP_ID: ${VITE_LOGTO_APP_ID:?VITE_LOGTO_APP_ID is required}
         VITE_APP_URL: ${VITE_APP_URL:-}
     restart: unless-stopped

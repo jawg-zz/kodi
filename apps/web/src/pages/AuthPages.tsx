@@ -5,7 +5,7 @@ import { Button } from "../components/Button";
 import { Card, CardBody, Loading } from "../components/ui";
 
 /**
- * Sign-in lives on Zitadel-hosted pages. These screens explain the handoff
+ * Sign-in lives on Logto-hosted pages. These screens explain the handoff
  * and preserve invite links across the round-trip. An already-signed-in
  * user landing here (back button, stale link) goes home — HomeRedirect
  * sorts out onboarding / app / portal.

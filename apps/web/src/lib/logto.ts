@@ -1,7 +1,7 @@
 import { UserManager, WebStorageStateStore, type User } from "oidc-client-ts";
 
-const issuer = import.meta.env.VITE_ZITADEL_ISSUER as string | undefined;
-const clientId = import.meta.env.VITE_ZITADEL_CLIENT_ID as string | undefined;
+const issuer = import.meta.env.VITE_LOGTO_ISSUER as string | undefined;
+const clientId = import.meta.env.VITE_LOGTO_APP_ID as string | undefined;
 const rawAppUrl = (
   import.meta.env.VITE_APP_URL as string | undefined
 )?.trim();
@@ -23,7 +23,7 @@ const safeAppUrl = /^https?:\/\//.test(appUrl)
 
 if (!issuer || !clientId) {
   console.error(
-    "Missing VITE_ZITADEL_ISSUER / VITE_ZITADEL_CLIENT_ID. " +
+    "Missing VITE_LOGTO_ISSUER / VITE_LOGTO_APP_ID. " +
       "Set them in apps/web/.env (see .env.example) and restart the dev server.",
   );
 }
@@ -33,7 +33,7 @@ const RETURN_TO_KEY = "kodi:returnTo";
 /**
  * Auth-only pages are never valid post-login landing spots. Without this,
  * signing in FROM /login stashes "/login" as the return target, so a
- * successful Zitadel round-trip drops the user right back on the sign-in
+ * successful Logto round-trip drops the user right back on the sign-in
  * page — looking exactly like a failed/looping login.
  */
 const AUTH_PAGES = new Set([
@@ -48,10 +48,10 @@ function sanitizeReturnTo(path: string): string {
   return path;
 }
 
-export const zitadelConfigured = Boolean(issuer && clientId);
+export const logtoConfigured = Boolean(issuer && clientId);
 
 /**
- * OIDC client for Zitadel (public SPA client, PKCE, no secret).
+ * OIDC client for self-hosted Logto (public SPA client, PKCE, no secret).
  * Tokens live in localStorage so all tabs share one session (print views
  * open in a new tab via target="_blank" and must stay signed in).
  * Silent renew uses a same-origin popup-free redirect URI handled by the
@@ -64,13 +64,13 @@ export const userManager = new UserManager({
   silent_redirect_uri: `${safeAppUrl}/auth/silent-renew`,
   post_logout_redirect_uri: `${safeAppUrl}/`,
   response_type: "code",
-  scope: "openid profile email",
+  scope: "openid profile email offline_access",
   loadUserInfo: true,
   automaticSilentRenew: true,
   userStore: new WebStorageStateStore({ store: window.localStorage }),
 });
 
-/** Remember where to land after the Zitadel round-trip (e.g. /invite/<token>). */
+/** Remember where to land after the Logto round-trip (e.g. /invite/<token>). */
 export function stashReturnTo(path: string): void {
   try {
     window.sessionStorage.setItem(RETURN_TO_KEY, sanitizeReturnTo(path));
@@ -90,10 +90,10 @@ export function takeReturnTo(): string {
 }
 
 /**
- * Token for Convex setAuth. Convex verifies the ID token (aud = client id,
- * stable per login); the access token's aud is the API/project resource and
- * would fail applicationID verification. Falls back to access token if the
- * ID token is missing/expired.
+ * Token for Convex setAuth. Convex verifies the ID token (aud = app id,
+ * stable per login); the access token's aud is the API resource and would
+ * fail applicationID verification. Falls back to access token if the ID
+ * token is missing/expired.
  */
 export async function getAccessToken(): Promise<string | null> {
   try {
@@ -105,16 +105,16 @@ export async function getAccessToken(): Promise<string | null> {
   }
 }
 
-/** Start login on Zitadel-hosted pages, returning to `path` afterwards. */
+/** Start login on Logto-hosted pages, returning to `path` afterwards. */
 export async function signInRedirect(returnTo = "/"): Promise<void> {
   stashReturnTo(returnTo);
   await userManager.signinRedirect();
 }
 
-/** Start registration on Zitadel-hosted pages (same flow, register hint). */
+/** Start registration on Logto-hosted pages (same flow, register hint). */
 export async function signUpRedirect(returnTo = "/onboarding"): Promise<void> {
   stashReturnTo(returnTo);
   await userManager.signinRedirect({
-    extraQueryParams: { prompt: "create" },
+    extraQueryParams: { first_screen: "register" },
   });
 }

@@ -7,7 +7,7 @@ portal. Printable A4 invoices, receipts, statements, and deposit settlements;
 collection reports with CSV export.
 
 Backend: **Convex** (typed database + server functions + auth + cron + HTTP),
-frontend: Vite + React + TypeScript + Tailwind v4 SPA with Zitadel OIDC.
+frontend: Vite + React + TypeScript + Tailwind v4 SPA with Logto OIDC.
 
 ## Repo layout
 
@@ -19,7 +19,7 @@ kodi/
 │   │                       invoices, payments, credit ledger, M-Pesa, invites)
 │   ├── lib/auth.ts         caller resolution + org guards + Daraja helpers
 │   ├── orgs|properties|tenants|invoices|payments|mpesa|invites|export.ts
-│   ├── auth.config.ts      Zitadel OIDC (customJwt: issuer + JWKS + app id)
+│   ├── auth.config.ts      Logto OIDC (customJwt: issuer + JWKS + app id)
 │   ├── http.ts             public POST /mpesa-callback (Safaricom webhook)
 │   ├── crons.ts            30-min stale-pending sweep
 │   └── seed.ts             platform plans seed
@@ -31,7 +31,7 @@ kodi/
 │                           invoices, payments, portal, reports, settings, print docs
 ├── packages/shared/        dependency-free TS: KES money, KE phones, months,
 │                           FIFO allocation, CSV (+ 35 vitest tests)
-├── docs/                   Zitadel provisioning runbook
+├── docs/                   Logto provisioning runbook
 ```
 
 ## Prerequisites
@@ -54,7 +54,7 @@ npx convex env set MPESA_CALLBACK_URL "<your-convex-site-url>/mpesa-callback"
 # and set MPESA_CALLBACK_URL to whichever answers.
 ```
 
-Auth is Zitadel OIDC (hosted sign-in pages, PKCE SPA client; the frontend
+Auth is Logto OIDC (self-hosted sign-in pages, PKCE SPA client; the frontend
 sends the ID token to Convex, verified against `convex/auth.config.ts`).
 Tenant isolation lives in `convex/lib/auth.ts` — every function resolves the caller to staff
 (`orgMembers`) or tenant (`tenantUsers`) and guards the org boundary in plain
@@ -76,8 +76,9 @@ npm run dev        # http://localhost:5173
 ```
 
 Deploy `apps/web/dist` (`npm run build`) to Vercel or Netlify — both configs
-are included, with SPA fallback routing. For Dokploy, set `VITE_CONVEX_URL` as
-a build arg (see `docker-compose.yml` + `apps/web/Dockerfile`).
+are included, with SPA fallback routing. For Dokploy, set `VITE_CONVEX_URL`,
+`VITE_LOGTO_ISSUER`, and `VITE_LOGTO_APP_ID` as build args
+(see `docker-compose.yml` + `apps/web/Dockerfile`).
 
 ## Verification (all green)
 

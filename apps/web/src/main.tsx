@@ -5,7 +5,7 @@ import "./index.css";
 import App from "./App.tsx";
 import { AuthProvider, getAccessToken } from "./lib/auth.tsx";
 import { convex, convexConfigured } from "./lib/convex.ts";
-import { userManager, takeReturnTo, zitadelConfigured } from "./lib/zitadel.ts";
+import { userManager, takeReturnTo, logtoConfigured } from "./lib/logto.ts";
 import { Loading } from "./components/ui.tsx";
 
 function ConfigError() {
@@ -14,8 +14,8 @@ function ConfigError() {
       <div className="max-w-md rounded-xl bg-white p-6 text-sm text-slate-700">
         <h1 className="text-lg font-bold text-slate-900">Auth is not configured</h1>
         <p className="mt-2">
-          Set <code>VITE_CONVEX_URL</code>, <code>VITE_ZITADEL_ISSUER</code>{" "}
-          and <code>VITE_ZITADEL_CLIENT_ID</code> in <code>apps/web/.env</code>{" "}
+          Set <code>VITE_CONVEX_URL</code>, <code>VITE_LOGTO_ISSUER</code>{" "}
+          and <code>VITE_LOGTO_APP_ID</code> in <code>apps/web/.env</code>{" "}
           (see <code>.env.example</code>) and restart the dev server.
         </p>
       </div>
@@ -26,7 +26,7 @@ function ConfigError() {
 /**
  * Handles OIDC redirects: full login at /auth/callback, silent renew in
  * iframe. Guards against double-processing (StrictMode) and against running
- * with no auth response (direct navigation / stale Zitadel session bounce),
+ * with no auth response (direct navigation / stale Logto session bounce),
  * both of which previously left users stranded on a reloading sign-in page.
  */
 function AuthCallback({ mode }: { mode: "login" | "silent" }) {
@@ -40,7 +40,7 @@ function AuthCallback({ mode }: { mode: "login" | "silent" }) {
       !window.location.search.includes("code=") &&
       !window.location.search.includes("error=")
     ) {
-      // Landed here without an auth response (e.g. logged-out Zitadel
+      // Landed here without an auth response (e.g. logged-out Logto
       // session bounced back, or stale redirect). Don't loop — go home.
       window.location.replace("/");
       return;
@@ -72,9 +72,9 @@ function AuthCallback({ mode }: { mode: "login" | "silent" }) {
   );
 }
 
-const ready = convexConfigured && zitadelConfigured;
+const ready = convexConfigured && logtoConfigured;
 
-// Feed the Convex client the current Zitadel ID token; re-resolves on
+// Feed the Convex client the current Logto ID token; re-resolves on
 // every request so silent renews take effect without a reload.
 if (ready) {
   convex.setAuth(getAccessToken);

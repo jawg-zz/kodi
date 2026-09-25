@@ -5,13 +5,14 @@ import { v } from "convex/values";
  * Kodi on Convex — rent-management SaaS (Kenya).
  *
  * Ported from Supabase Postgres: all money is integer whole KES,
- * month keys are "YYYY-MM", user references are Zitadel subject strings
+ * month keys are "YYYY-MM", user references are OIDC subject strings
  * (identity.subject, not v.id()), enforced at function boundaries in code
  * (no RLS — auth lives in convex/lib/auth.ts).
  *
  * Auth history: Convex Auth Password + authTables until Sept 2026, then a
- * hard cutover to Zitadel OIDC wiped the auth tables. Old subject-keyed
- * app rows were orphaned; everyone re-registered.
+ * hard cutover to Zitadel OIDC wiped the auth tables; a second hard cutover
+ * to self-hosted Logto OIDC followed. Each cutover orphaned old
+ * subject-keyed app rows; everyone re-registered.
  */
 export default defineSchema({
 
@@ -37,7 +38,7 @@ export default defineSchema({
 
   orgMembers: defineTable({
     orgId: v.id("orgs"),
-    /** Convex Auth subject (identity.subject), stable per user. */
+    /** OIDC subject (identity.subject), stable per user. */
     userId: v.string(),
     role: v.union(v.literal("owner"), v.literal("manager")),
   })

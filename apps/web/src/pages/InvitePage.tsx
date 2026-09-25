@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { claimInvite, getInvite } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { stashReturnTo } from "../lib/zitadel";
+import { stashReturnTo } from "../lib/logto";
 import { PublicLayout } from "../components/Layout";
 import { Button } from "../components/Button";
 import { Card, CardBody, ErrorBanner, Loading } from "../components/ui";
 
 /**
- * Invite-link landing: the invitee registers via Zitadel with the invited
+ * Invite-link landing: the invitee registers via Logto with the invited
  * email first, then claims the token to join the business as manager or
  * tenant. The token survives the OIDC round-trip via returnTo storage.
  */

@@ -14,15 +14,15 @@ import {
   signInRedirect,
   signUpRedirect,
   userManager,
-  zitadelConfigured,
-} from "./zitadel";
+  logtoConfigured,
+} from "./logto";
 import type { Org, OrgMember, Profile, Tenant } from "./types";
 
 type Role = "staff" | "tenant" | null;
 
 interface AuthState {
   loading: boolean;
-  /** True when a non-expired Zitadel session exists. */
+  /** True when a non-expired Logto session exists. */
   isAuthenticated: boolean;
   session: { userId: string } | null;
   user: { id: string } | null;
@@ -85,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const myOrg = useQuery(api.orgs.myOrg, isAuthenticated ? {} : "skip");
 
   const signIn = useCallback(async () => {
-    // Clear any stale local session first: a logged-out Zitadel SSO cookie
+    // Clear any stale local session first: a logged-out Logto SSO cookie
     // plus a leftover local user replays the old session and bounces
     // straight back to /login in a reload loop.
     await userManager.removeUser().catch(() => {});
@@ -94,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Kept for AuthPages' signature: name/phone are collected at onboarding
-  // (createOrg args), not at Zitadel registration.
+  // (createOrg args), not at Logto registration.
   const signUp = useCallback(async () => {
     await signUpRedirect();
     return { error: null, needsConfirmation: false };
@@ -102,7 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     // Clear local state FIRST so the app can never render authenticated
-    // from a stale session while the Zitadel redirect is in flight.
+    // from a stale session while the Logto redirect is in flight.
     await userManager.removeUser().catch(() => {});
     setOidcUser(null);
     try {
@@ -116,7 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {}, []);
 
   const loading =
-    !zitadelConfigured ||
+    !logtoConfigured ||
     oidcLoading ||
     (isAuthenticated && myOrg === undefined);
 

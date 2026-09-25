@@ -132,7 +132,7 @@ export const createOrg = mutation({
     const fullName = (args.fullName ?? "").trim();
     const phone = (args.phone ?? "").trim() || undefined;
     if (profile === null) {
-      // Name/phone come from the onboarding form (Zitadel holds the email).
+      // Name/phone come from the onboarding form (Logto holds the email).
       await ctx.db.insert("profiles", {
         userId,
         full_name: fullName,
