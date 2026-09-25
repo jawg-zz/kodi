@@ -1,9 +1,9 @@
 /**
  * Backend JWT verification config — Logto OIDC (self-hosted).
  *
- * Identity: <LOGTO_BASE_URL>/oidc (standard OIDC discovery at
- * <LOGTO_BASE_URL>/oidc/.well-known/openid-configuration, RS256 JWKS).
- * Fill in the three values below from your Logto console + discovery doc.
+ * Identity: https://logto.spidmax.win/oidc (standard OIDC discovery at
+ * https://logto.spidmax.win/oidc/.well-known/openid-configuration,
+ * JWKS at https://logto.spidmax.win/oidc/jwks).
  *
  * Convex verifies the ID token's iss/aud/signature against this and exposes
  * it as ctx.auth.getUserIdentity(). Only identity.subject is consumed (see
@@ -11,17 +11,22 @@
  * (convex/invites.ts); name/phone come from the profile and invite flows,
  * not the token.
  *
- * Hard cutover from Zitadel OIDC (Sept 2026): the old provider is gone. Old
+ * Signing key requirement: Convex customJwt accepts RS256 or ES256 only.
+ * Logto ships with an EC P-384 (ES384) key, so the instance MUST be rotated
+ * to an RSA key first (see docs/logto-runbook.md §3) — otherwise every
+ * authenticated call fails signature verification.
+ *
+ * Hard cutover from Zitadel OIDC: the old provider is gone. Old
  * subject-keyed rows are orphaned; everyone re-registers in Logto.
  */
 export default {
   providers: [
     {
       type: "customJwt",
-      issuer: "https://LOGTO_HOST_NOT_SET/oidc",
-      jwks: "https://LOGTO_HOST_NOT_SET/oidc/jwks",
+      issuer: "https://logto.spidmax.win/oidc",
+      jwks: "https://logto.spidmax.win/oidc/jwks",
       algorithm: "RS256",
-      applicationID: "LOGTO_APP_ID_NOT_SET",
+      applicationID: "1n1zuedqyc7yptyd44ih1",
     },
   ],
 };

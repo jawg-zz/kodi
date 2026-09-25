@@ -35,18 +35,39 @@ ID token, or tenant/manager claiming breaks.
    grantable — `offline_access` gives rotating refresh tokens so session
    renewal works even when third-party cookies block the silent iframe.
 
-## 3. Verify before handing back
+## 3. Rotate the OIDC signing key to RSA (required)
+
+Convex's `customJwt` verifier accepts **RS256 or ES256 only**, but Logto
+ships with an EC P-384 (**ES384**) signing key — with the stock key, every
+authenticated Convex call fails signature verification. Rotate once to RSA:
+
+```bash
+# Inside the Logto container (or wherever the Logto CLI can reach its DB):
+npx logto db config rotate oidc.privateKeys --type rsa --gracePeriod 3600
+```
+
+Notes:
+- The 1-hour grace period stages the new key: clients refresh JWKS before
+  it starts signing. Keep the previous key until existing sessions/tokens
+  signed with it have expired.
+- Re-run the JWKS check below afterwards: the active key must now show
+  `"kty": "RSA"` / `"alg": "RS256"`.
+- Reference: Logto docs "Rotate signing keys (OSS)".
+
+## 4. Verify before handing back
 
 ```bash
 curl -sS https://<logto-host>/oidc/.well-known/openid-configuration | head -c 600; echo
+curl -sS https://<logto-host>/oidc/jwks | head -c 400; echo
 ```
 
 Expect: `issuer` exactly `https://<logto-host>/oidc` (with the `/oidc`
 suffix — report the exact string; `convex/auth.config.ts` must match it
-byte-for-byte), a `jwks_uri` under the same origin, and an
-`end_session_endpoint` (used for logout).
+byte-for-byte), a `jwks_uri` under the same origin, an
+`end_session_endpoint` (used for logout), and a JWKS key with
+`"kty": "RSA"` / `"alg": "RS256"` (§3 above).
 
-## 4. Hand back to dev (paste into chat)
+## 5. Hand back to dev (paste into chat)
 
 ```text
 LOGTO_ISSUER=https://<logto-host>/oidc
@@ -56,7 +77,7 @@ LOGTO_APP_ID=<string app id>
 Plus the full discovery JSON (or at least `issuer` + `jwks_uri` lines) so
 `convex/auth.config.ts` can be filled in exactly.
 
-## 5. What dev does next (no action for you)
+## 6. What dev does next (no action for you)
 
 Backend `convex/auth.config.ts` switches to
 `{ issuer: LOGTO_ISSUER, jwks: <jwks_uri>, algorithm: "RS256",
