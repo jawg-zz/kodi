@@ -5,7 +5,17 @@ Zitadel. Kodi needs exactly two values back from this runbook:
 `LOGTO_ISSUER` (includes `/oidc`) and `LOGTO_APP_ID`.
 
 This runbook assumes your Logto instance is already deployed and reachable
-(e.g. `https://logto.spidmax.win`) with the admin console working.
+with the admin console working.
+
+> **Admin host vs core host.** Logto splits its front door in two: the ADMIN
+> console (e.g. `https://logto.spidmax.win`, where you click around) and the
+> CORE OIDC service (e.g. `https://logtoend.spidmax.win`, which actually
+> issues tokens and serves `/.well-known/openid-configuration` + `/oidc/jwks`).
+> They can serve DIFFERENT keys — key rotations done in the console apply to
+> the tenant, but each host serves its own view of them. **Every URL below
+> that says `<core-host>` means the core OIDC host, NOT the admin console
+> host.** Verify with `curl https://<core-host>/oidc/jwks` — it must show the
+> RSA key; the admin host's JWKS may show a stale EC key and must be ignored.
 
 ## 1. Create the SPA application
 
@@ -54,23 +64,24 @@ Notes:
   `"kty": "RSA"` / `"alg": "RS256"`.
 - Reference: Logto docs "Rotate signing keys (OSS)".
 
-## 4. Verify before handing back
+## 4. Verify before handing back (use the CORE host)
 
 ```bash
-curl -sS https://<logto-host>/oidc/.well-known/openid-configuration | head -c 600; echo
-curl -sS https://<logto-host>/oidc/jwks | head -c 400; echo
+curl -sS https://<core-host>/oidc/.well-known/openid-configuration | head -c 600; echo
+curl -sS https://<core-host>/oidc/jwks | head -c 400; echo
 ```
 
-Expect: `issuer` exactly `https://<logto-host>/oidc` (with the `/oidc`
+Expect: `issuer` exactly `https://<core-host>/oidc` (with the `/oidc`
 suffix — report the exact string; `convex/auth.config.ts` must match it
 byte-for-byte), a `jwks_uri` under the same origin, an
 `end_session_endpoint` (used for logout), and a JWKS key with
-`"kty": "RSA"` / `"alg": "RS256"` (§3 above).
+`"kty": "RSA"` / `"alg": "RS256"` (§3 above). If the admin host's JWKS
+shows a different key, ignore it — only the core host matters.
 
 ## 5. Hand back to dev (paste into chat)
 
 ```text
-LOGTO_ISSUER=https://<logto-host>/oidc
+LOGTO_ISSUER=https://<core-host>/oidc
 LOGTO_APP_ID=<string app id>
 ```
 

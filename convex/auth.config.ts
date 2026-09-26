@@ -1,9 +1,14 @@
 /**
  * Backend JWT verification config — Logto OIDC (self-hosted).
  *
- * Identity: https://logto.spidmax.win/oidc (standard OIDC discovery at
- * https://logto.spidmax.win/oidc/.well-known/openid-configuration,
- * JWKS at https://logto.spidmax.win/oidc/jwks).
+ * Identity: https://logtoend.spidmax.win/oidc (standard OIDC discovery at
+ * https://logtoend.spidmax.win/oidc/.well-known/openid-configuration,
+ * JWKS at https://logtoend.spidmax.win/oidc/jwks).
+ *
+ * NOTE — admin vs core hosts: the admin console lives at logto.spidmax.win
+ * but the tenant's OIDC (issuer, JWKS, tokens) is served from the CORE host
+ * logtoend.spidmax.win. The verifier MUST point at the core host; the admin
+ * host's JWKS serves a different (stale EC) key and verification fails.
  *
  * Convex verifies the ID token's iss/aud/signature against this and exposes
  * it as ctx.auth.getUserIdentity(). Only identity.subject is consumed (see
@@ -23,8 +28,8 @@ export default {
   providers: [
     {
       type: "customJwt",
-      issuer: "https://logto.spidmax.win/oidc",
-      jwks: "https://logto.spidmax.win/oidc/jwks",
+      issuer: "https://logtoend.spidmax.win/oidc",
+      jwks: "https://logtoend.spidmax.win/oidc/jwks",
       algorithm: "RS256",
       applicationID: "1n1zuedqyc7yptyd44ih1",
     },
