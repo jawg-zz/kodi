@@ -105,7 +105,7 @@ export default defineSchema({
     /**
      * Stable Paybill account code (e.g. "GC-A1"). Required: minted in the
      * same transaction as tenant creation, so no write path can produce a
-     * code-less row. Pre-code legacy rows are healed by backfillAccountCodes.
+     * code-less row. Legacy rows healed by backfillAccountCodes.
      */
     accountCode: v.string(),
     unitId: v.optional(v.id("units")),
