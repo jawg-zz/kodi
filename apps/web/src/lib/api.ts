@@ -971,6 +971,33 @@ export async function ensureMyAccountCode(): Promise<string> {
   }
 }
 
+/** Staff: mint one tenant's Paybill account code (pre-code rows). */
+export async function ensureTenantAccountCode(
+  tenantId: string,
+): Promise<string> {
+  try {
+    return (await convex.mutation(
+      (api as any).c2b.ensureTenantAccountCode,
+      { tenantId },
+    )) as string;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Staff: backfill codes for every tenant in the org missing one. */
+export async function backfillAccountCodes(
+  orgId: string,
+): Promise<{ minted: number; skipped: number }> {
+  try {
+    return (await convex.mutation((api as any).c2b.backfillAccountCodes, {
+      orgId,
+    })) as { minted: number; skipped: number };
+  } catch (e) {
+    return err(e);
+  }
+}
+
 export async function getC2bStatus(): Promise<C2bStatusView> {
   try {
     const row = (await convex.query((api as any).c2b.getC2bStatus, {})) as any;

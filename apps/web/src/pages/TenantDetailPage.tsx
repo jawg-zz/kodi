@@ -4,6 +4,7 @@ import { currentMonthKey, formatKES, monthLabel, parseKES } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import {
   applyCreditNow,
+  ensureTenantAccountCode,
   generateInvoices,
   getCreditLedger,
   getTenant,
@@ -192,7 +193,19 @@ export function TenantDetailPage() {
                 {tenant.account_code ? (
                   <strong>{tenant.account_code}</strong>
                 ) : (
-                  <span className="text-slate-400">assigning…</span>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await ensureTenantAccountCode(tenant.id);
+                        await load();
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : String(e));
+                      }
+                    }}
+                    className="font-medium text-brand-600 hover:underline"
+                  >
+                    Assign code
+                  </button>
                 )}
               </p>
               <p><span className="text-slate-500">Deposit held:</span> <Money value={tenant.deposit_held} /></p>

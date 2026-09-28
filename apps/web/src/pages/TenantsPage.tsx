@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { formatKES, isValidKenyanPhone, maskPhone, normalizeKenyanPhone, parseKES } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import {
+  backfillAccountCodes,
   createTenant,
   deleteTenant,
   inviteUser,
@@ -34,6 +35,8 @@ export function TenantsPage() {
   const [editing, setEditing] = useState<Tenant | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Tenant | null>(null);
   const [q, setQ] = useState("");
+  const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
+  const [backfillBusy, setBackfillBusy] = useState(false);
 
   const load = async () => {
     if (!org) return;
@@ -67,6 +70,27 @@ export function TenantsPage() {
     }
   };
 
+  const missingCodes = tenants.filter((t) => !t.account_code).length;
+
+  const handleBackfill = async () => {
+    if (!org) return;
+    setBackfillBusy(true);
+    setBackfillMsg(null);
+    try {
+      const res = await backfillAccountCodes(org.id);
+      setBackfillMsg(
+        res.minted > 0
+          ? `Assigned ${res.minted} Paybill code${res.minted === 1 ? "" : "s"}.`
+          : "Every tenant already has a Paybill code.",
+      );
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBackfillBusy(false);
+    }
+  };
+
   if (loading) return <Loading label="Loading tenants…" />;
   if (error) return <ErrorBanner message={error} onRetry={load} />;
 
@@ -87,9 +111,21 @@ export function TenantsPage() {
     <div>
       <PageHeader
         title="Tenants"
-        sub={`${tenants.length} tenants`}
-        actions={<Button onClick={() => { setEditing(null); setShowModal(true); }}>Add tenant</Button>}
+        sub={`${tenants.length} tenants${missingCodes > 0 ? ` · ${missingCodes} missing Paybill codes` : ""}`}
+        actions={
+          <div className="flex gap-2">
+            {missingCodes > 0 && (
+              <Button variant="secondary" onClick={handleBackfill} disabled={backfillBusy}>
+                {backfillBusy ? "Assigning…" : `Assign Paybill codes (${missingCodes})`}
+              </Button>
+            )}
+            <Button onClick={() => { setEditing(null); setShowModal(true); }}>Add tenant</Button>
+          </div>
+        }
       />
+      {backfillMsg && (
+        <p className="mb-4 text-sm text-green-700">{backfillMsg}</p>
+      )}
 
       <div className="mb-4 max-w-sm">
         <Input placeholder="Search by name or phone…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -110,6 +146,7 @@ export function TenantsPage() {
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">Unit</th>
                   <th className="px-4 py-3">Phone</th>
+                  <th className="px-4 py-3">Paybill acct</th>
                   <th className="px-4 py-3 text-right">Deposit held</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3 text-right">Actions</th>
@@ -125,6 +162,7 @@ export function TenantsPage() {
                     </td>
                     <td className="px-4 py-3">{unitLabel(t.unit_id)}</td>
                     <td className="px-4 py-3">{maskPhone(t.phone)}</td>
+                    <td className="px-4 py-3 font-mono text-xs">{t.account_code ?? <span className="text-slate-400">—</span>}</td>
                     <td className="px-4 py-3 text-right"><Money value={t.deposit_held} /></td>
                     <td className="px-4 py-3">
                       <Badge tone={statusTone[t.status] ?? "slate"}>{t.status.replace("_", " ")}</Badge>

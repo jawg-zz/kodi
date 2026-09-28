@@ -920,6 +920,58 @@ export const ensureMyAccountCode = mutation({
   },
 });
 
+/**
+ * Staff: mint/backfill one tenant's account code (pre-code rows show
+ * "assigning…" until this runs).
+ */
+export const ensureTenantAccountCode = mutation({
+  args: { tenantId: v.id("tenants") },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    const tenant = await ctx.db.get(args.tenantId);
+    if (tenant === null) throw new ConvexError("Tenant not found");
+    await assertStaff(ctx, tenant.orgId);
+    return await ensureAccountCode(ctx, args.tenantId);
+  },
+});
+
+/**
+ * Staff: backfill account codes for every tenant in the org missing one.
+ * Returns the number minted. One audit entry for the run.
+ */
+export const backfillAccountCodes = mutation({
+  args: { orgId: v.id("orgs") },
+  returns: v.object({ minted: v.number(), skipped: v.number() }),
+  handler: async (ctx, args) => {
+    const caller = await assertStaff(ctx, args.orgId);
+    const tenants = await ctx.db
+      .query("tenants")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    let minted = 0;
+    let skipped = 0;
+    for (const t of tenants) {
+      if (t.accountCode) {
+        skipped += 1;
+        continue;
+      }
+      await ensureAccountCode(ctx, t._id);
+      minted += 1;
+    }
+    if (minted > 0) {
+      await audit(ctx, {
+        orgId: args.orgId,
+        actorUserId: caller.userId,
+        action: "tenant.backfillCodes",
+        entityType: "tenant",
+        entityId: undefined,
+        metadata: JSON.stringify({ minted }),
+      });
+    }
+    return { minted, skipped };
+  },
+});
+
 async function getOwnTenantOrg(ctx: MutationCtx): Promise<{ orgId: Id<"orgs"> }> {
   const identity = await ctx.auth.getUserIdentity();
   if (identity === null) throw new ConvexError("Not authenticated");

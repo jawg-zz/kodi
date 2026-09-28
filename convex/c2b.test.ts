@@ -629,3 +629,35 @@ test("simulateC2b dry-runs without writing", async () => {
   expect(rows).toHaveLength(0);
   void tenantId;
 });
+
+test("backfillAccountCodes mints codes for pre-code rows only", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId, asStaff } = await seedOrg(t);
+  const { tenantId } = await seedTenant(t, orgId);
+  // Simulate a pre-code row: strip the seeded code.
+  await t.run(async (ctx) => {
+    await ctx.db.patch(tenantId, { accountCode: undefined });
+  });
+  const res = await asStaff.mutation(api.c2b.backfillAccountCodes, { orgId });
+  expect(res.minted).toBe(1);
+  expect(res.skipped).toBe(0);
+  const again = await asStaff.mutation(api.c2b.backfillAccountCodes, { orgId });
+  expect(again.minted).toBe(0);
+  expect(again.skipped).toBe(1);
+});
+
+test("ensureTenantAccountCode assigns one tenant's code", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId, asStaff } = await seedOrg(t);
+  const { tenantId } = await seedTenant(t, orgId);
+  await t.run(async (ctx) => {
+    await ctx.db.patch(tenantId, { accountCode: undefined });
+  });
+  const code = await asStaff.mutation(api.c2b.ensureTenantAccountCode, {
+    tenantId,
+  });
+  expect(code).toBeTruthy();
+  const tenant = await t.run(async (ctx) => ctx.db.get(tenantId));
+  expect(tenant?.accountCode).toBe(code);
+  void orgId;
+});
