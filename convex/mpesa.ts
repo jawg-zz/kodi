@@ -242,15 +242,18 @@ export const stkInitiate = action({
         "M-Pesa is not configured for this business. Add Daraja credentials in Settings.",
       );
     }
-    const callbackBase = (process.env.MPESA_CALLBACK_URL ?? "").replace(
-      /\/$/,
-      "",
-    );
-    if (!callbackBase) {
+    const rawCallback = (process.env.MPESA_CALLBACK_URL ?? "").replace(/\/$/, "");
+    if (!rawCallback) {
       throw new ConvexError(
         "M-Pesa callbacks are not configured — set MPESA_CALLBACK_URL env var to <convex-site-url>/mpesa-callback",
       );
     }
+    // Daraja rejects a bare site URL: the callback must be the full
+    // /mpesa-callback route. Accept both forms so a missing path suffix
+    // fails loudly at initiate time instead of silently dropping callbacks.
+    const callbackUrl = rawCallback.endsWith("/mpesa-callback")
+      ? rawCallback
+      : `${rawCallback}/mpesa-callback`;
     const base = creds.environment === "production" ? PROD : SANDBOX;
     const token = await darajaToken(
       base,
@@ -274,7 +277,7 @@ export const stkInitiate = action({
         PartyA: phone,
         PartyB: creds.shortcode,
         PhoneNumber: phone,
-        CallBackURL: callbackBase,
+        CallBackURL: callbackUrl,
         AccountReference: args.tenantId.slice(0, 12),
         TransactionDesc: "Rent payment",
       }),
@@ -367,23 +370,24 @@ export const stkStatus = action({
       };
       const code = String(data.ResultCode ?? "");
       if (code === "0") {
-        if (!tx.paymentId) {
-          const paymentId: Id<"payments"> = await ctx.runMutation(
-            internal.payments.internalRecordStkPayment,
-            {
-              orgId: tx.orgId,
-              tenantId: tx.tenantId,
-              amount: tx.amount,
-              mpesaCode: tx.mpesaReceipt,
-              paidAt: Date.now(),
-            },
-          );
+        // Single atomic reconcile: records the payment (claiming the
+        // checkout) or returns the existing payment when the callback
+        // already won the race. Never writes two payments for one push.
+        const reconciled = await ctx.runMutation(
+          internal.mpesaInternal.reconcileSuccessInternal,
+          {
+            orgId: tx.orgId,
+            tenantId: tx.tenantId,
+            checkoutRequestId: tx.checkoutRequestId,
+            amount: tx.amount,
+            mpesaReceipt: tx.mpesaReceipt,
+          },
+        );
+        if (reconciled !== null && !reconciled.deduplicated) {
           await ctx.runMutation(internal.mpesaInternal.updateTx, {
             checkoutRequestId: tx.checkoutRequestId,
-            status: "success",
             resultCode: 0,
             resultDesc: data.ResultDesc,
-            paymentId,
           });
         }
       } else if (code === "1032") {
@@ -401,8 +405,12 @@ export const stkStatus = action({
           resultDesc: data.ResultDesc,
         });
       } else if (code && code !== "0") {
+        // Any other Daraja result is terminal for the handset prompt —
+        // mark it failed with the code so staff see WHY instead of a
+        // "pending" row that only clears on the 30-minute sweep.
         await ctx.runMutation(internal.mpesaInternal.updateTx, {
           checkoutRequestId: tx.checkoutRequestId,
+          status: "failed",
           resultCode: Number(code) || undefined,
           resultDesc: data.ResultDesc,
         });

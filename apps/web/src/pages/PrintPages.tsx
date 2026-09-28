@@ -175,11 +175,22 @@ export function ReceiptDocPage() {
           <Table
             head={["Invoice", "Amount applied"]}
             rows={pay.allocations.map((a, i) => [
-              <span key={`i${i}`}>Invoice</span>,
+              <span key={`i${i}`}>{a.month ? monthLabel(a.month) : "Invoice"}</span>,
               <Money key={`a${i}`} value={a.amount} />,
             ])}
           />
         </>
+      )}
+      {pay.leftover_credit > 0 && (
+        <p className="mt-3 text-sm text-slate-600">
+          Kept as prepaid credit: <Money value={pay.leftover_credit} className="font-semibold" />
+        </p>
+      )}
+      {(pay.status ?? "active") !== "active" && (
+        <p className="mt-3 text-sm font-medium text-slate-700">
+          This payment was {pay.status === "voided" ? "voided" : "refunded"}
+          {pay.reverse_reason ? ` — ${pay.reverse_reason}` : ""} and no longer counts in totals.
+        </p>
       )}
       {pay.note && <p className="mt-3 text-sm text-slate-600">Note: {pay.note}</p>}
     </DocShell>
@@ -252,12 +263,14 @@ export function StatementDocPage() {
       <h3 className="mt-4 font-semibold">Payments</h3>
       <Table
         head={["Date", "Receipt", "Method", "Amount"]}
-        rows={payments.map((p) => [
-          formatDate(p.paid_at),
-          p.receipt_no,
-          p.mpesa_code ? `M-Pesa ${p.mpesa_code}` : p.method,
-          <Money key="a" value={p.amount} />,
-        ])}
+        rows={payments
+          .filter((p) => (p.status ?? "active") === "active")
+          .map((p) => [
+            formatDate(p.paid_at),
+            `${p.receipt_no}${p.allocations.length > 0 ? ` (${p.allocations.map((a) => (a.month ? monthLabel(a.month) : "")).filter(Boolean).join(", ")})` : " (credit)"}`,
+            p.mpesa_code ? `M-Pesa ${p.mpesa_code}` : p.method,
+            <Money key="a" value={p.amount} />,
+          ])}
       />
     </DocShell>
   );

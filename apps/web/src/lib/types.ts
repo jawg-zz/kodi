@@ -1,5 +1,4 @@
 import type {
-  Allocation,
   InvoiceLines,
   InvoiceStatus,
   OrgRole,
@@ -11,8 +10,10 @@ import type {
   UnitStatus,
   UnitType,
 } from "@kodi/shared";
+import type { Allocation as SharedAllocation } from "@kodi/shared";
 
-export type { Allocation, InvoiceLines };
+export type { InvoiceLines };
+export type Allocation = SharedAllocation;
 
 export interface Org {
   id: string;
@@ -86,6 +87,12 @@ export interface Invoice {
   notes: string | null;
 }
 
+export type PaymentStatus = "active" | "voided" | "refunded";
+
+export interface AllocationWithMonth extends SharedAllocation {
+  month?: string;
+}
+
 export interface Payment {
   id: string;
   org_id: string;
@@ -94,10 +101,47 @@ export interface Payment {
   method: PaymentMethod;
   mpesa_code: string | null;
   paid_at: string;
-  allocations: Allocation[];
+  allocations: AllocationWithMonth[];
   receipt_no: string;
   recorded_by: string | null;
   note: string | null;
+  status: PaymentStatus;
+  checkout_request_id: string | null;
+  leftover_credit: number;
+  reversed_at: string | null;
+  reverse_reason: string | null;
+}
+
+export interface PaymentRecordResult {
+  id: string;
+  allocations: AllocationWithMonth[];
+  leftover_credit: number;
+  credit_used: number;
+}
+
+export interface AllocationPreviewRow {
+  invoiceId: string;
+  month: string;
+  total: number;
+  balance: number;
+  applied: number;
+}
+
+export interface AllocationPreview {
+  allocations: AllocationPreviewRow[];
+  leftover: number;
+}
+
+export type CreditLedgerKind = "created" | "applied" | "reversed";
+
+export interface CreditLedgerEntry {
+  id: string;
+  kind: CreditLedgerKind;
+  amount: number;
+  balance_after: number;
+  payment_id: string | null;
+  note: string | null;
+  created_at: string;
 }
 
 export interface MpesaTransaction {
@@ -185,6 +229,8 @@ export interface ReportPaymentRow {
   mpesa_code: string | null;
   amount: number;
   note: string | null;
+  status: string;
+  allocation_summary: string | null;
 }
 
 export interface PaymentsBreakdown {

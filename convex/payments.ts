@@ -1,13 +1,8 @@
 import { ConvexError, v } from "convex/values";
-import {
-  internalMutation,
-  mutation,
-  query,
-  type MutationCtx,
-} from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { internal } from "./_generated/api";
 import { assertOrgMember, assertStaff, audit } from "./lib/auth";
+import { recordPaymentCore, reversePaymentInTx } from "./lib/ledger";
 
 const paymentMethod = v.union(
   v.literal("mpesa_stk"),
@@ -15,6 +10,18 @@ const paymentMethod = v.union(
   v.literal("cash"),
   v.literal("bank"),
 );
+
+const paymentStatus = v.union(
+  v.literal("active"),
+  v.literal("voided"),
+  v.literal("refunded"),
+);
+
+const allocationShape = v.object({
+  invoiceId: v.id("invoices"),
+  amount: v.number(),
+  month: v.optional(v.string()),
+});
 
 const paymentShape = v.object({
   _id: v.id("payments"),
@@ -25,12 +32,16 @@ const paymentShape = v.object({
   method: paymentMethod,
   mpesaCode: v.optional(v.string()),
   paidAt: v.number(),
-  allocations: v.array(
-    v.object({ invoiceId: v.id("invoices"), amount: v.number() }),
-  ),
+  allocations: v.array(allocationShape),
   receiptNo: v.string(),
   recordedBy: v.optional(v.string()),
   note: v.optional(v.string()),
+  status: v.optional(paymentStatus),
+  checkoutRequestId: v.optional(v.string()),
+  leftoverCredit: v.optional(v.number()),
+  reversedAt: v.optional(v.number()),
+  reversedBy: v.optional(v.string()),
+  reverseReason: v.optional(v.string()),
 });
 
 const paymentWithRefs = v.object({
@@ -42,107 +53,28 @@ const paymentWithRefs = v.object({
   method: paymentMethod,
   mpesaCode: v.optional(v.string()),
   paidAt: v.number(),
-  allocations: v.array(
-    v.object({ invoiceId: v.id("invoices"), amount: v.number() }),
-  ),
+  allocations: v.array(allocationShape),
   receiptNo: v.string(),
   recordedBy: v.optional(v.string()),
   note: v.optional(v.string()),
+  status: v.optional(paymentStatus),
+  checkoutRequestId: v.optional(v.string()),
+  leftoverCredit: v.optional(v.number()),
+  reversedAt: v.optional(v.number()),
+  reversedBy: v.optional(v.string()),
+  reverseReason: v.optional(v.string()),
   tenant: v.union(
     v.object({ _id: v.id("tenants"), full_name: v.string() }),
     v.null(),
   ),
 });
 
-/** RCP-0001, RCP-0002, ... per org. */
-async function nextReceiptNo(
-  ctx: MutationCtx,
-  orgId: Id<"orgs">,
-): Promise<string> {
-  const existing = await ctx.db
-    .query("receiptCounters")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .first();
-  if (existing === null) {
-    await ctx.db.insert("receiptCounters", { orgId, lastNo: 1 });
-    return "RCP-0001";
-  }
-  const n = existing.lastNo + 1;
-  await ctx.db.patch(existing._id, { lastNo: n });
-  return `RCP-${String(n).padStart(4, "0")}`;
-}
-
-function checkAmount(amount: number): number {
-  const r = Math.round(amount);
-  if (!Number.isFinite(r) || r <= 0) {
-    throw new ConvexError("Payment amount must be a positive number of KES");
-  }
-  return r;
-}
-
-/**
- * Core ledger write shared by manual payments and the STK callback path:
- * receipt number + FIFO allocation + ledger row + credit carryover.
- */
-export async function recordPaymentCore(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"orgs">;
-    tenantId: Id<"tenants">;
-    amount: number;
-    method: "mpesa_stk" | "mpesa_manual" | "cash" | "bank";
-    mpesaCode?: string;
-    paidAt?: number;
-    note?: string;
-    recordedBy?: string;
-  },
-): Promise<Id<"payments">> {
-  const amount = checkAmount(args.amount);
-  const tenant = await ctx.db.get(args.tenantId);
-  if (tenant === null || tenant.orgId !== args.orgId) {
-    throw new ConvexError("Tenant not found in this organization");
-  }
-  if (args.method === "mpesa_manual" && args.mpesaCode) {
-    const dup = await ctx.db
-      .query("payments")
-      .withIndex("by_org_code", (q) =>
-        q.eq("orgId", args.orgId).eq("mpesaCode", args.mpesaCode as string),
-      )
-      .first();
-    if (dup !== null && dup.method === "mpesa_manual") {
-      throw new ConvexError("This M-Pesa code was already recorded.");
-    }
-  }
-  const receiptNo = await nextReceiptNo(ctx, args.orgId);
-  const fifo: {
-    allocations: { invoiceId: Id<"invoices">; amount: number }[];
-    leftover: number;
-  } = await ctx.runMutation(internal.invoices.allocateFifoInternal, {
-    orgId: args.orgId,
-    tenantId: args.tenantId,
-    amount,
-  });
-  const id = await ctx.db.insert("payments", {
-    orgId: args.orgId,
-    tenantId: args.tenantId,
-    amount,
-    method: args.method,
-    mpesaCode: args.mpesaCode,
-    paidAt: args.paidAt ?? Date.now(),
-    allocations: fifo.allocations,
-    receiptNo,
-    recordedBy: args.recordedBy,
-    note: args.note?.trim() || undefined,
-  });
-  if (fifo.leftover > 0) {
-    await ctx.runMutation(internal.tenants.addCreditInternal, {
-      orgId: args.orgId,
-      tenantId: args.tenantId,
-      amount: fifo.leftover,
-    });
-  }
-  return id;
-}
+const paymentResult = v.object({
+  id: v.id("payments"),
+  allocations: v.array(allocationShape),
+  leftoverCredit: v.number(),
+  creditUsed: v.number(),
+});
 
 export const listPayments = query({
   args: { orgId: v.id("orgs"), tenantId: v.optional(v.id("tenants")) },
@@ -219,11 +151,13 @@ export const recordManualPayment = mutation({
     mpesaCode: v.optional(v.union(v.string(), v.null())),
     paidAt: v.number(),
     note: v.optional(v.union(v.string(), v.null())),
+    targets: v.optional(v.array(v.id("invoices"))),
+    useCredit: v.optional(v.boolean()),
   },
-  returns: v.id("payments"),
+  returns: paymentResult,
   handler: async (ctx, args) => {
     const caller = await assertStaff(ctx, args.orgId);
-    const id = await recordPaymentCore(ctx, {
+    const res = await recordPaymentCore(ctx, {
       orgId: args.orgId,
       tenantId: args.tenantId,
       amount: args.amount,
@@ -232,15 +166,17 @@ export const recordManualPayment = mutation({
       paidAt: args.paidAt,
       note: args.note ?? undefined,
       recordedBy: caller.userId,
+      targets: args.targets,
+      useCredit: args.useCredit ?? false,
     });
     await audit(ctx, {
       orgId: args.orgId,
       actorUserId: caller.userId,
       action: "payment.record",
       entityType: "payment",
-      entityId: id,
+      entityId: res.id,
     });
-    return id;
+    return res;
   },
 });
 
@@ -256,12 +192,16 @@ export const getPayment = query({
       method: paymentMethod,
       mpesaCode: v.optional(v.string()),
       paidAt: v.number(),
-      allocations: v.array(
-        v.object({ invoiceId: v.id("invoices"), amount: v.number() }),
-      ),
+      allocations: v.array(allocationShape),
       receiptNo: v.string(),
       recordedBy: v.optional(v.string()),
       note: v.optional(v.string()),
+      status: v.optional(paymentStatus),
+      checkoutRequestId: v.optional(v.string()),
+      leftoverCredit: v.optional(v.number()),
+      reversedAt: v.optional(v.number()),
+      reversedBy: v.optional(v.string()),
+      reverseReason: v.optional(v.string()),
       tenant: v.union(
         v.object({
           _id: v.id("tenants"),
@@ -293,8 +233,9 @@ export const getPayment = query({
 });
 
 /**
- * STK callback path — internal only. The CheckoutRequestID capability is
- * checked by the caller (http.ts / stkStatus action), not here.
+ * STK success path — internal only. The CheckoutRequestID capability is
+ * checked by the caller (http.ts / stkStatus action); the duplicate claim
+ * inside recordPaymentCore makes callback-vs-poll retries safe.
  */
 export const internalRecordStkPayment = internalMutation({
   args: {
@@ -304,10 +245,11 @@ export const internalRecordStkPayment = internalMutation({
     mpesaCode: v.optional(v.string()),
     paidAt: v.optional(v.number()),
     note: v.optional(v.string()),
+    checkoutRequestId: v.optional(v.string()),
   },
   returns: v.id("payments"),
   handler: async (ctx, args) => {
-    return await recordPaymentCore(ctx, {
+    const res = await recordPaymentCore(ctx, {
       orgId: args.orgId,
       tenantId: args.tenantId,
       amount: args.amount,
@@ -315,7 +257,73 @@ export const internalRecordStkPayment = internalMutation({
       mpesaCode: args.mpesaCode,
       paidAt: args.paidAt,
       note: args.note ?? "M-Pesa STK Push",
+      checkoutRequestId: args.checkoutRequestId,
     });
+    return res.id;
+  },
+});
+
+/**
+ * Staff: void a wrongly-recorded payment (wrong tenant, wrong amount, test
+ * entry). Reverses allocations + created credit; the row stays for the
+ * audit trail but drops out of totals.
+ */
+export const voidPayment = mutation({
+  args: { id: v.id("payments"), reason: v.string() },
+  returns: v.object({ creditShortfall: v.number() }),
+  handler: async (ctx, args) => {
+    const payment = await ctx.db.get(args.id);
+    if (payment === null) throw new ConvexError("Payment not found");
+    const caller = await assertStaff(ctx, payment.orgId);
+    const reason = args.reason.trim();
+    if (reason === "") throw new ConvexError("Give a reason for the void.");
+    const res = await reversePaymentInTx(ctx, args.id, "voided", reason, caller.userId);
+    await audit(ctx, {
+      orgId: payment.orgId,
+      actorUserId: caller.userId,
+      action: "payment.void",
+      entityType: "payment",
+      entityId: args.id,
+      metadata: JSON.stringify({
+        amount: payment.amount,
+        receiptNo: payment.receiptNo,
+        reason,
+        creditShortfall: res.creditShortfall,
+      }),
+    });
+    return res;
+  },
+});
+
+/**
+ * Staff: record that money from a payment was returned to the tenant
+ * (duplicate charge, STK double-debit settled off-platform). Same ledger
+ * reversal as a void, tracked under its own audit action.
+ */
+export const refundPayment = mutation({
+  args: { id: v.id("payments"), reason: v.string() },
+  returns: v.object({ creditShortfall: v.number() }),
+  handler: async (ctx, args) => {
+    const payment = await ctx.db.get(args.id);
+    if (payment === null) throw new ConvexError("Payment not found");
+    const caller = await assertStaff(ctx, payment.orgId);
+    const reason = args.reason.trim();
+    if (reason === "") throw new ConvexError("Describe how the refund was made.");
+    const res = await reversePaymentInTx(ctx, args.id, "refunded", reason, caller.userId);
+    await audit(ctx, {
+      orgId: payment.orgId,
+      actorUserId: caller.userId,
+      action: "payment.refund",
+      entityType: "payment",
+      entityId: args.id,
+      metadata: JSON.stringify({
+        amount: payment.amount,
+        receiptNo: payment.receiptNo,
+        reason,
+        creditShortfall: res.creditShortfall,
+      }),
+    });
+    return res;
   },
 });
 

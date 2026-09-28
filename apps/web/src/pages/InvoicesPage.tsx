@@ -9,6 +9,8 @@ import { Field, Input, Select } from "../components/Field";
 import { Card, EmptyState, ErrorBanner, Loading, PageHeader } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { InvoiceStatusBadge, LinesBreakdown, Money } from "../components/domain";
+import { RecordPaymentFields } from "../components/RecordPaymentForm";
+import { MpesaCollectModal } from "../components/MpesaCollectModal";
 
 export function InvoicesPage() {
   const { org } = useAuth();
@@ -21,6 +23,8 @@ export function InvoicesPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState<InvoiceWithRefs | null>(null);
+  const [paying, setPaying] = useState<InvoiceWithRefs | null>(null);
+  const [collecting, setCollecting] = useState<InvoiceWithRefs | null>(null);
 
   const load = async () => {
     if (!org) return;
@@ -144,12 +148,20 @@ export function InvoicesPage() {
                     </td>
                     <td className="px-4 py-3">{i.due_date}</td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <InvoiceStatusBadge status={i.status} />
                         {i.balance > 0 && (
-                          <button onClick={() => setEditing(i)} className="text-xs font-medium text-brand-600 hover:underline">
-                            Edit
-                          </button>
+                          <>
+                            <button onClick={() => setCollecting(i)} className="text-xs font-medium text-brand-600 hover:underline">
+                              Collect
+                            </button>
+                            <button onClick={() => setPaying(i)} className="text-xs font-medium text-brand-600 hover:underline">
+                              Record
+                            </button>
+                            <button onClick={() => setEditing(i)} className="text-xs font-medium text-brand-600 hover:underline">
+                              Edit
+                            </button>
+                          </>
                         )}
                         <Link to={`/print/invoice/${i.id}`} target="_blank" rel="noreferrer" className="text-xs font-medium text-brand-600 hover:underline">
                           Print
@@ -172,7 +184,77 @@ export function InvoicesPage() {
           onSaved={async () => { setEditing(null); await load(); }}
         />
       )}
+
+      {paying && org && (
+        <PayInvoiceModal
+          orgId={org.id}
+          invoice={paying}
+          tenantName={tenantName(paying.tenant_id)}
+          onClose={() => setPaying(null)}
+          onRecorded={async () => { setPaying(null); await load(); }}
+        />
+      )}
+
+      {collecting && (
+        <CollectInvoiceModal
+          invoice={collecting}
+          tenantName={tenantName(collecting.tenant_id)}
+          tenantPhone={collecting.tenant?.phone ?? tenants.find((t) => t.id === collecting.tenant_id)?.phone ?? ""}
+          onClose={() => setCollecting(null)}
+          onRecorded={async () => { setCollecting(null); await load(); }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Record a payment pre-targeted at this invoice (remainder still FIFO). */
+export function PayInvoiceModal({ orgId, invoice, tenantName, onClose, onRecorded }: {
+  orgId: string;
+  invoice: InvoiceWithRefs;
+  tenantName: string;
+  onClose: () => void;
+  onRecorded: () => Promise<void>;
+}) {
+  return (
+    <Modal title={`Record payment — ${tenantName} (${invoice.month})`} onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-slate-600">
+          Balance <Money value={invoice.balance} className="font-semibold" /> — pre-targeted
+          below; anything extra settles the oldest invoices first.
+        </p>
+        <RecordPaymentFields
+          orgId={orgId}
+          tenantId={invoice.tenant_id}
+          suggested={invoice.balance}
+          presetTargets={[invoice.id]}
+          onDone={onRecorded}
+        />
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** STK push pre-filled with this invoice's balance. */
+export function CollectInvoiceModal({ invoice, tenantName, tenantPhone, onClose, onRecorded }: {
+  invoice: InvoiceWithRefs;
+  tenantName: string;
+  tenantPhone: string;
+  onClose: () => void;
+  onRecorded: () => Promise<void>;
+}) {
+  return (
+    <MpesaCollectModal
+      tenantId={invoice.tenant_id}
+      tenantName={tenantName}
+      defaultPhone={tenantPhone}
+      defaultAmount={invoice.balance}
+      onClose={onClose}
+      onRecorded={onRecorded}
+    />
   );
 }
 export function EditInvoiceModal({ invoice, tenantName, onClose, onSaved }: {

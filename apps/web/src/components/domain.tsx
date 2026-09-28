@@ -71,3 +71,14 @@ const paymentMethodLabels: Record<string, string> = {
 export function paymentMethodLabel(m: string): string {
   return paymentMethodLabels[m] ?? m;
 }
+
+const paymentStatusTone: Record<string, "green" | "slate" | "amber"> = {
+  active: "green",
+  voided: "slate",
+  refunded: "amber",
+};
+
+export function PaymentStatusBadge({ status }: { status: string }) {
+  const label = status === "active" ? "Active" : status === "voided" ? "Voided" : status === "refunded" ? "Refunded" : status;
+  return <Badge tone={paymentStatusTone[status] ?? "slate"}>{label}</Badge>;
+}

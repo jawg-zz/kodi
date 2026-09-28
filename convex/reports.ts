@@ -163,6 +163,8 @@ export const collectionSummary = query({
       )
       .collect();
     for (const p of payments) {
+      // Voided/refunded rows stay for the audit trail but are not cash.
+      if ((p.status ?? "active") !== "active") continue;
       if (!inScope(tenantUnit.get(p.tenantId))) continue;
       const agg = perMonth.get(monthKeyFromMs(p.paidAt));
       if (agg !== undefined) agg.collected += p.amount;
@@ -326,6 +328,8 @@ const paymentRow = v.object({
   mpesaCode: v.optional(v.string()),
   amount: v.number(),
   note: v.optional(v.string()),
+  status: v.optional(v.string()),
+  allocationSummary: v.optional(v.string()),
 });
 
 const METHODS = ["mpesa_stk", "mpesa_manual", "cash", "bank"] as const;
@@ -373,6 +377,8 @@ export const paymentsBreakdown = query({
       mpesaCode?: string;
       amount: number;
       note?: string;
+      status?: string;
+      allocationSummary?: string;
     }[] = [];
     for (const p of payments) {
       const tenant = tenantById.get(p.tenantId);
@@ -380,9 +386,17 @@ export const paymentsBreakdown = query({
         const propId = tenant?.unitId !== undefined ? unitProps.get(tenant.unitId) : undefined;
         if (propId === undefined) continue;
       }
-      const t = totals.get(p.method)!;
-      t.total += p.amount;
-      t.count += 1;
+      const status = p.status ?? "active";
+      // Reversed rows stay visible for the audit trail but out of totals.
+      if (status === "active") {
+        const t = totals.get(p.method)!;
+        t.total += p.amount;
+        t.count += 1;
+      }
+      const allocs = (p.allocations ?? []) as {
+        amount: number;
+        month?: string;
+      }[];
       rows.push({
         receiptNo: p.receiptNo,
         paidAt: p.paidAt,
@@ -391,14 +405,22 @@ export const paymentsBreakdown = query({
         mpesaCode: p.mpesaCode,
         amount: p.amount,
         note: p.note,
+        status,
+        allocationSummary:
+          allocs.length === 0
+            ? "credit"
+            : allocs
+                .map((a) => `${a.month ?? "?"}:${a.amount}`)
+                .join(" + "),
       });
     }
     rows.sort((a, b) => b.paidAt - a.paidAt);
     const truncated = rows.length > EXPORT_ROW_CAP;
+    const activeRows = rows.filter((r) => (r.status ?? "active") === "active");
     return {
       byMethod: METHODS.map((method) => ({ method, ...totals.get(method)! })),
-      total: rows.reduce((s, r) => s + r.amount, 0),
-      count: rows.length,
+      total: activeRows.reduce((s, r) => s + r.amount, 0),
+      count: activeRows.length,
       rows: rows.slice(0, EXPORT_ROW_CAP) as never,
       truncated,
     };

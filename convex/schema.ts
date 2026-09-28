@@ -166,16 +166,61 @@ export default defineSchema({
     /** ms epoch. */
     paidAt: v.number(),
     allocations: v.array(
-      v.object({ invoiceId: v.id("invoices"), amount: v.number() }),
+      v.object({
+        invoiceId: v.id("invoices"),
+        amount: v.number(),
+        /** Denormalized invoice month ("YYYY-MM") for receipts/displays. */
+        month: v.optional(v.string()),
+      }),
     ),
     receiptNo: v.string(),
     recordedBy: v.optional(v.string()),
     note: v.optional(v.string()),
+    /**
+     * Ledger state. Rows written before this field existed are "active".
+     * voided = staff-cancelled (e.g. wrong tenant/amount), refunded = money
+     * returned to the tenant. Both reverse allocations + created credit.
+     */
+    status: v.optional(
+      v.union(
+        v.literal("active"),
+        v.literal("voided"),
+        v.literal("refunded"),
+      ),
+    ),
+    /** STK checkout that created this payment — one payment per checkout. */
+    checkoutRequestId: v.optional(v.string()),
+    /** Overpayment carried to tenant credit by this payment. */
+    leftoverCredit: v.optional(v.number()),
+    reversedAt: v.optional(v.number()),
+    reversedBy: v.optional(v.string()),
+    reverseReason: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_tenant", ["tenantId"])
     .index("by_org_paidAt", ["orgId", "paidAt"])
-    .index("by_org_code", ["orgId", "mpesaCode"]),
+    .index("by_org_code", ["orgId", "mpesaCode"])
+    .index("by_checkout", ["checkoutRequestId"]),
+
+  /**
+   * Append-only prepaid-credit history per tenant. `amount` is signed:
+   * positive when credit is created, negative when consumed/reversed.
+   */
+  creditLedger: defineTable({
+    orgId: v.id("orgs"),
+    tenantId: v.id("tenants"),
+    paymentId: v.optional(v.id("payments")),
+    kind: v.union(
+      v.literal("created"),
+      v.literal("applied"),
+      v.literal("reversed"),
+    ),
+    amount: v.number(),
+    balanceAfter: v.number(),
+    note: v.optional(v.string()),
+  })
+    .index("by_tenant", ["tenantId"])
+    .index("by_org", ["orgId"]),
 
   mpesaTransactions: defineTable({
     orgId: v.id("orgs"),

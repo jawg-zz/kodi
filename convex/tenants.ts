@@ -7,6 +7,7 @@ import {
 } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { assertOrgMember, assertStaff, audit } from "./lib/auth";
+import { consumeCreditInTx, addCreditInTx } from "./lib/credit";
 
 const tenantStatus = v.union(
   v.literal("active"),
@@ -401,6 +402,27 @@ export const deleteTenant = mutation({
     const row = await ctx.db.get(args.id);
     if (row === null) throw new ConvexError("Tenant not found");
     const caller = await assertStaff(ctx, row.orgId);
+    // Never orphan the money trail: payments, invoices, STK rows and credit
+    // rows stay queryable after the tenant is gone. Settle or void first.
+    const [payments, invoices, txs] = await Promise.all([
+      ctx.db
+        .query("payments")
+        .withIndex("by_tenant", (q) => q.eq("tenantId", args.id))
+        .take(1),
+      ctx.db
+        .query("invoices")
+        .withIndex("by_tenant_month", (q) => q.eq("tenantId", args.id))
+        .take(1),
+      ctx.db
+        .query("mpesaTransactions")
+        .withIndex("by_tenant", (q) => q.eq("tenantId", args.id))
+        .take(1),
+    ]);
+    if (payments.length > 0 || invoices.length > 0 || txs.length > 0) {
+      throw new ConvexError(
+        "This tenant has invoices or payments on record. Settle the deposit and keep the history — move them out instead of deleting.",
+      );
+    }
     const link = await ctx.db
       .query("tenantUsers")
       .withIndex("by_tenant", (q) => q.eq("tenantId", args.id))
@@ -491,23 +513,82 @@ export const addCreditInternal = internalMutation({
   args: { orgId: v.id("orgs"), tenantId: v.id("tenants"), amount: v.number() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const rounded = Math.round(args.amount);
-    if (!Number.isFinite(rounded) || rounded <= 0) return null;
-    const existing = await ctx.db
-      .query("tenantCredits")
+    await addCreditInTx(ctx, args.orgId, args.tenantId, args.amount);
+    return null;
+  },
+});
+
+const creditEntryShape = v.object({
+  _id: v.id("creditLedger"),
+  _creationTime: v.number(),
+  kind: v.union(
+    v.literal("created"),
+    v.literal("applied"),
+    v.literal("reversed"),
+  ),
+  amount: v.number(),
+  balanceAfter: v.number(),
+  paymentId: v.optional(v.id("payments")),
+  note: v.optional(v.string()),
+});
+
+/** Prepaid-credit history for one tenant, newest first. Staff + self-tenant. */
+export const getCreditLedger = query({
+  args: { tenantId: v.id("tenants") },
+  returns: v.array(creditEntryShape),
+  handler: async (ctx, args) => {
+    const tenant = await ctx.db.get(args.tenantId);
+    if (tenant === null) return [];
+    const caller = await assertOrgMember(ctx, tenant.orgId);
+    if (caller.role === "tenant" && caller.tenantId !== args.tenantId) {
+      throw new ConvexError("Not found");
+    }
+    const rows = await ctx.db
+      .query("creditLedger")
       .withIndex("by_tenant", (q) => q.eq("tenantId", args.tenantId))
-      .first();
-    if (existing === null) {
-      await ctx.db.insert("tenantCredits", {
-        orgId: args.orgId,
-        tenantId: args.tenantId,
-        balance: rounded,
-      });
-    } else {
-      await ctx.db.patch(existing._id, {
-        balance: existing.balance + rounded,
+      .order("desc")
+      .take(200);
+    return rows.map((r) => ({
+      _id: r._id,
+      _creationTime: r._creationTime,
+      kind: r.kind,
+      amount: r.amount,
+      balanceAfter: r.balanceAfter,
+      paymentId: r.paymentId,
+      note: r.note,
+    })) as never;
+  },
+});
+
+/**
+ * Staff: sweep a tenant's held credit onto their open invoices right now
+ * (without waiting for the next invoice generation). Returns the consumed
+ * total in KES.
+ */
+export const applyCreditNow = mutation({
+  args: { tenantId: v.id("tenants") },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const tenant = await ctx.db.get(args.tenantId);
+    if (tenant === null) throw new ConvexError("Tenant not found");
+    const caller = await assertStaff(ctx, tenant.orgId);
+    const consumed = await consumeCreditInTx(
+      ctx,
+      tenant.orgId,
+      args.tenantId,
+      Number.MAX_SAFE_INTEGER,
+      { note: "Applied on demand by staff" },
+    );
+    if (consumed > 0) {
+      await audit(ctx, {
+        orgId: tenant.orgId,
+        actorUserId: caller.userId,
+        action: "credit.apply",
+        entityType: "tenant",
+        entityId: args.tenantId,
+        metadata: JSON.stringify({ consumed }),
       });
     }
-    return null;
+    return consumed;
   },
 });

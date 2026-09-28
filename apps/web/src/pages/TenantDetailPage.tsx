@@ -1,26 +1,28 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { currentMonthKey, formatKES, monthLabel, normalizeMpesaCode, parseKES } from "@kodi/shared";
+import { currentMonthKey, formatKES, monthLabel, parseKES } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import {
+  applyCreditNow,
   generateInvoices,
+  getCreditLedger,
   getTenant,
   getTenantCredit,
   getTenantPortalLink,
   listTenantInvoices,
   listTenantPayments,
   listUnits,
-  recordManualPayment,
   settleDeposit,
   updateTenant,
 } from "../lib/api";
-import type { InvoiceWithRefs, PaymentWithRefs, Tenant, Unit } from "../lib/types";
+import type { CreditLedgerEntry, InvoiceWithRefs, PaymentWithRefs, Tenant, Unit } from "../lib/types";
 import { Button } from "../components/Button";
-import { Field, Input, Select, Textarea } from "../components/Field";
+import { Field, Input, Textarea } from "../components/Field";
 import { Badge, Card, CardBody, ErrorBanner, Loading, PageHeader } from "../components/ui";
 import { Modal } from "../components/Modal";
-import { InvoiceStatusBadge, Money } from "../components/domain";
+import { InvoiceStatusBadge, Money, PaymentStatusBadge } from "../components/domain";
 import { MpesaCollectModal } from "../components/MpesaCollectModal";
+import { RecordPaymentFields } from "../components/RecordPaymentForm";
 import { InviteTenantButton } from "./TenantsPage";
 import { TenantModal } from "./TenantsPage";
 
@@ -35,11 +37,15 @@ export function TenantDetailPage() {
   const [invoices, setInvoices] = useState<InvoiceWithRefs[]>([]);
   const [payments, setPayments] = useState<PaymentWithRefs[]>([]);
   const [credit, setCredit] = useState(0);
+  const [ledger, setLedger] = useState<CreditLedgerEntry[]>([]);
   const [hasPortal, setHasPortal] = useState(false);
   const [showPay, setShowPay] = useState(false);
+  const [payTargets, setPayTargets] = useState<string[]>([]);
   const [showCollect, setShowCollect] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [showSettle, setShowSettle] = useState(false);
+  const [creditBusy, setCreditBusy] = useState(false);
+  const [creditMsg, setCreditMsg] = useState<string | null>(null);
 
   const load = async () => {
     if (!org || !id) return;
@@ -62,6 +68,11 @@ export function TenantDetailPage() {
         setCredit(await getTenantCredit(id));
       } catch {
         setCredit(0);
+      }
+      try {
+        setLedger(await getCreditLedger(id));
+      } catch {
+        setLedger([]);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -93,6 +104,28 @@ export function TenantDetailPage() {
     }
   };
 
+  const openRecord = (targets: string[] = []) => {
+    setPayTargets(targets);
+    setShowPay(true);
+  };
+
+  const handleApplyCredit = async () => {
+    if (!id) return;
+    setCreditBusy(true);
+    setCreditMsg(null);
+    try {
+      const consumed = await applyCreditNow(id);
+      setCreditMsg(consumed > 0
+        ? `${formatKES(consumed)} of prepaid credit applied to the oldest invoices.`
+        : "No open invoices for the credit to settle.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreditBusy(false);
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -101,7 +134,7 @@ export function TenantDetailPage() {
         actions={
           <>
             <Button variant="secondary" onClick={() => setShowCollect(true)}>Collect via M-Pesa</Button>
-            <Button variant="secondary" onClick={() => setShowPay(true)}>Record payment</Button>
+            <Button variant="secondary" onClick={() => openRecord()}>Record payment</Button>
             <Button variant="secondary" onClick={() => setShowEdit(true)}>Edit</Button>
           </>
         }
@@ -118,9 +151,33 @@ export function TenantDetailPage() {
               {netOwed > 0 ? `owed${oldest ? ` · oldest: ${monthLabel(oldest.month)}` : ""}` : credit > 0 ? "fully paid up — credit held" : "fully paid up"}
             </p>
             {credit > 0 && (
-              <p className="mt-1 text-xs font-medium text-brand-600">
-                Prepaid credit: {formatKES(credit)} (applies automatically to new invoices)
-              </p>
+              <>
+                <p className="mt-1 text-xs font-medium text-brand-600">
+                  Prepaid credit: {formatKES(credit)} (applies automatically to new invoices)
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button size="sm" variant="secondary" onClick={handleApplyCredit} disabled={creditBusy || balance <= 0}>
+                    {creditBusy ? "Applying…" : "Apply credit now"}
+                  </Button>
+                </div>
+                {creditMsg && <p className="mt-1 text-xs text-green-700">{creditMsg}</p>}
+                {ledger.length > 0 && (
+                  <details className="mt-2 text-xs text-slate-500">
+                    <summary className="cursor-pointer font-medium text-slate-600">Credit history ({ledger.length})</summary>
+                    <ul className="mt-1 space-y-1">
+                      {ledger.slice(0, 8).map((l) => (
+                        <li key={l.id} className="flex justify-between gap-2">
+                          <span>
+                            {l.kind === "created" ? "Overpayment" : l.kind === "applied" ? "Applied" : "Reversed"}
+                            {l.note ? ` · ${l.note}` : ""}
+                          </span>
+                          <span className={l.amount >= 0 ? "text-brand-600" : ""}>{formatKES(l.amount)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </>
             )}
             <div className="mt-3">
               <Badge tone={tenant.status === "active" ? "green" : tenant.status === "notice" ? "amber" : "slate"}>
@@ -178,6 +235,7 @@ export function TenantDetailPage() {
                       <th className="py-2 pr-3 text-right">Balance</th>
                       <th className="py-2 pr-3">Due</th>
                       <th className="py-2">Status</th>
+                      <th className="py-2"><span className="sr-only">Actions</span></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -188,6 +246,18 @@ export function TenantDetailPage() {
                         <td className="py-2 pr-3 text-right"><Money value={i.balance} /></td>
                         <td className="py-2 pr-3">{i.due_date}</td>
                         <td className="py-2"><InvoiceStatusBadge status={i.status} /></td>
+                        <td className="py-2 text-right">
+                          {i.balance > 0 && (
+                            <span className="flex justify-end gap-2">
+                              <button onClick={() => setShowCollect(true)} className="text-xs font-medium text-brand-600 hover:underline">
+                                Collect
+                              </button>
+                              <button onClick={() => openRecord([i.id])} className="text-xs font-medium text-brand-600 hover:underline">
+                                Pay
+                              </button>
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -212,11 +282,14 @@ export function TenantDetailPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {payments.map((p) => (
-                      <tr key={p.id}>
+                      <tr key={p.id} className={(p.status ?? "active") !== "active" ? "opacity-60" : undefined}>
                         <td className="py-2 pr-3">
                           <Link to={`/app/payments/${p.id}`} className="font-medium text-brand-600 hover:underline">
                             {p.receipt_no}
-                          </Link>
+                          </Link>{" "}
+                          {(p.status ?? "active") !== "active" && (
+                            <PaymentStatusBadge status={p.status} />
+                          )}
                         </td>
                         <td className="py-2 pr-3 text-right"><Money value={p.amount} /></td>
                         <td className="py-2 pr-3">{p.mpesa_code ? `M-Pesa ${p.mpesa_code}` : p.method}</td>
@@ -224,7 +297,7 @@ export function TenantDetailPage() {
                         <td className="py-2 text-xs text-slate-500">
                           {p.allocations.length === 0
                             ? "held as prepaid credit"
-                            : p.allocations.map((a) => `${formatKES(a.amount)}`).join(" + ")}
+                            : p.allocations.map((a) => `${a.month ? monthLabel(a.month) : formatKES(a.amount)}${a.month ? ` ${formatKES(a.amount)}` : ""}`).join(" + ")}
                         </td>
                       </tr>
                     ))}
@@ -248,14 +321,22 @@ export function TenantDetailPage() {
       </Card>
 
       {showPay && (
-        <RecordPaymentModal
-          orgId={org!.id}
-          tenantId={tenant.id}
-          tenantName={tenant.full_name}
-          suggested={netOwed > 0 ? netOwed : (unit?.rent_amount ?? 0)}
-          onClose={() => setShowPay(false)}
-          onRecorded={load}
-        />
+        <Modal title={`Record payment — ${tenant.full_name}`} onClose={() => { setShowPay(false); setPayTargets([]); }}>
+          <RecordPaymentFields
+            orgId={org!.id}
+            tenantId={tenant.id}
+            suggested={netOwed > 0 ? netOwed : (unit?.rent_amount ?? 0)}
+            presetTargets={payTargets}
+            onDone={async () => {
+              setShowPay(false);
+              setPayTargets([]);
+              await load();
+            }}
+          />
+          <div className="mt-4 flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => { setShowPay(false); setPayTargets([]); }}>Cancel</Button>
+          </div>
+        </Modal>
       )}
       {showCollect && (
         <MpesaCollectModal
@@ -286,98 +367,6 @@ export function TenantDetailPage() {
         />
       )}
     </div>
-  );
-}
-
-export function RecordPaymentModal({ orgId, tenantId, tenantName, suggested, onClose, onRecorded }: {
-  orgId: string;
-  tenantId: string;
-  tenantName: string;
-  suggested: number;
-  onClose: () => void;
-  onRecorded: () => Promise<void>;
-}) {
-  const [amount, setAmount] = useState(suggested ? String(suggested) : "");
-  const [method, setMethod] = useState<"mpesa_manual" | "cash" | "bank">("mpesa_manual");
-  const [mpesaCode, setMpesaCode] = useState("");
-  const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10));
-  const [note, setNote] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const save = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const value = parseKES(amount);
-    if (value === null || value < 1) { setError("Enter a valid amount in KES."); return; }
-    const code = normalizeMpesaCode(mpesaCode);
-    if (method === "mpesa_manual" && !code) {
-      setError("Enter the M-Pesa transaction code from the confirmation SMS (e.g. SLJ7XK2M9P).");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await recordManualPayment({
-        orgId,
-        tenantId,
-        amount: value,
-        method,
-        mpesaCode: method === "mpesa_manual" ? code : null,
-        paidAt: new Date(paidAt || Date.now()).toISOString(),
-        note: note.trim() || null,
-      });
-      await onRecorded();
-      onClose();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Unique-index hit means this SMS code was already recorded.
-      setError(/already exists|duplicate/i.test(msg)
-        ? "This M-Pesa code was already recorded. Check Payments before retrying."
-        : msg);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal title={`Record payment — ${tenantName}`} onClose={onClose}>
-      <form onSubmit={save} className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Amount (KES)" required>
-            <Input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="numeric" required />
-          </Field>
-          <Field label="Method">
-            <Select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
-              <option value="mpesa_manual">M-Pesa (transaction code)</option>
-              <option value="cash">Cash</option>
-              <option value="bank">Bank transfer</option>
-            </Select>
-          </Field>
-        </div>
-        {method === "mpesa_manual" && (
-          <Field label="M-Pesa transaction code" required hint="From the tenant's confirmation SMS.">
-            <Input value={mpesaCode} onChange={(e) => setMpesaCode(e.target.value.toUpperCase())} placeholder="SLJ7XK2M9P" />
-          </Field>
-        )}
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Date received">
-            <Input type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
-          </Field>
-          <Field label="Note">
-            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional" />
-          </Field>
-        </div>
-        <p className="text-xs text-slate-500">
-          The payment applies to the oldest unpaid invoice first; any remainder is kept as prepaid
-          credit and applies automatically to the next invoice.
-        </p>
-        {error && <ErrorBanner message={error} />}
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="submit" disabled={busy}>{busy ? "Recording…" : "Record payment"}</Button>
-        </div>
-      </form>
-    </Modal>
   );
 }
 

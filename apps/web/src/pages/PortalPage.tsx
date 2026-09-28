@@ -168,17 +168,23 @@ export function PortalPage() {
             <p className="text-sm text-slate-500">No payments yet.</p>
           ) : (
             <ul className="divide-y divide-slate-100">
-              {payments.map((p) => (
-                <li key={p.id} className="flex items-center justify-between py-2 text-sm">
-                  <div>
-                    <p className="font-medium">{p.receipt_no}</p>
-                    <p className="text-xs text-slate-500">
-                      {paymentMethodLabel(p.method)}{p.mpesa_code ? ` · ${p.mpesa_code}` : ""} · {new Date(p.paid_at).toLocaleDateString("en-GB")}
-                    </p>
-                  </div>
-                  <Money value={p.amount} className="font-semibold text-brand-600" />
-                </li>
-              ))}
+              {payments
+                .filter((p) => (p.status ?? "active") === "active")
+                .map((p) => (
+                  <li key={p.id} className="flex items-center justify-between py-2 text-sm">
+                    <div>
+                      <p className="font-medium">{p.receipt_no}</p>
+                      <p className="text-xs text-slate-500">
+                        {paymentMethodLabel(p.method)}{p.mpesa_code ? ` · ${p.mpesa_code}` : ""} · {new Date(p.paid_at).toLocaleDateString("en-GB")}
+                        {p.allocations.length > 0 && (
+                          <> · {p.allocations.map((a) => (a.month ? monthLabel(a.month) : "")).filter(Boolean).join(", ") || "applied"}</>
+                        )}
+                        {p.allocations.length === 0 && <> · held as credit</>}
+                      </p>
+                    </div>
+                    <Money value={p.amount} className="font-semibold text-brand-600" />
+                  </li>
+                ))}
             </ul>
           )}
         </CardBody>

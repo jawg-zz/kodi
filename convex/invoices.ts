@@ -1,6 +1,5 @@
 import { ConvexError, v } from "convex/values";
 import {
-  internalMutation,
   mutation,
   query,
   type MutationCtx,
@@ -8,6 +7,7 @@ import {
 } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { assertOrgMember, assertStaff, audit, dueDateFor, isMonthKey } from "./lib/auth";
+import { consumeCreditInTx } from "./lib/credit";
 
 const invoiceShape = v.object({
   _id: v.id("invoices"),
@@ -236,22 +236,17 @@ export const generateInvoices = mutation({
       count += 1;
     }
 
-    // Consume held credit against open invoices (oldest first).
+    // Consume held credit against open invoices (oldest first), with a
+    // ledger row per tenant so the sweep is traceable.
     const credits = await ctx.db
       .query("tenantCredits")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
     for (const c of credits) {
       if (c.balance <= 0) continue;
-      const remainder = await applyCreditToInvoices(
-        ctx,
-        args.orgId,
-        c.tenantId,
-        c.balance,
-      );
-      if (remainder !== c.balance) {
-        await ctx.db.patch(c._id, { balance: remainder });
-      }
+      await consumeCreditInTx(ctx, args.orgId, c.tenantId, c.balance, {
+        note: `Applied on invoice generation (${args.month})`,
+      });
     }
 
     await audit(ctx, {
@@ -270,11 +265,6 @@ export const updateInvoice = mutation({
     id: v.id("invoices"),
     notes: v.optional(v.union(v.string(), v.null())),
     dueDate: v.optional(v.string()),
-    total: v.optional(v.number()),
-    balance: v.optional(v.number()),
-    status: v.optional(
-      v.union(v.literal("unpaid"), v.literal("partial"), v.literal("paid")),
-    ),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -289,21 +279,10 @@ export const updateInvoice = mutation({
       }
       patch.dueDate = args.dueDate;
     }
-    if (args.total !== undefined) {
-      const t = Math.round(args.total);
-      if (!Number.isFinite(t) || t < 0) {
-        throw new ConvexError("Total must be non-negative.");
-      }
-      patch.total = t;
-    }
-    if (args.balance !== undefined) {
-      const b = Math.round(args.balance);
-      if (!Number.isFinite(b) || b < 0) {
-        throw new ConvexError("Balance must be non-negative.");
-      }
-      patch.balance = b;
-    }
-    if (args.status !== undefined) patch.status = args.status;
+    // Totals, balances and statuses are ledger-owned: they move only via
+    // payments (record/void/refund) and credit sweeps, so allocated money
+    // always adds up. Correct a wrong invoice by voiding the payment, not
+    // by editing the numbers here.
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.id, patch as never);
       await audit(ctx, {
@@ -318,23 +297,35 @@ export const updateInvoice = mutation({
   },
 });
 
-/** Internal: apply a payment's amount across open invoices (FIFO). */
-export const allocateFifoInternal = internalMutation({
-  args: {
-    orgId: v.id("orgs"),
-    tenantId: v.id("tenants"),
-    amount: v.number(),
-  },
+/**
+ * Read-only dry run of the FIFO split for `amount` — used by the record
+ * modals to show "this will clear Sep + leave KES X as credit" before commit.
+ * No rows are touched.
+ */
+export const previewAllocation = query({
+  args: { tenantId: v.id("tenants"), amount: v.number() },
   returns: v.object({
     allocations: v.array(
-      v.object({ invoiceId: v.id("invoices"), amount: v.number() }),
+      v.object({
+        invoiceId: v.id("invoices"),
+        month: v.string(),
+        total: v.number(),
+        balance: v.number(),
+        applied: v.number(),
+      }),
     ),
     leftover: v.number(),
   }),
   handler: async (ctx, args) => {
+    const tenant = await ctx.db.get(args.tenantId);
+    if (tenant === null) throw new ConvexError("Tenant not found");
+    const caller = await assertOrgMember(ctx, tenant.orgId);
+    if (caller.role === "tenant" && caller.tenantId !== args.tenantId) {
+      throw new ConvexError("Not found");
+    }
     const rounded = Math.round(args.amount);
     if (!Number.isFinite(rounded) || rounded <= 0) {
-      throw new ConvexError("Allocation amount must be positive");
+      return { allocations: [], leftover: 0 };
     }
     const open = await ctx.db
       .query("invoices")
@@ -342,21 +333,27 @@ export const allocateFifoInternal = internalMutation({
       .collect();
     open.sort((a, b) => a.month.localeCompare(b.month));
     let remaining = rounded;
-    const allocations: { invoiceId: Id<"invoices">; amount: number }[] = [];
+    const allocations: {
+      invoiceId: Id<"invoices">;
+      month: string;
+      total: number;
+      balance: number;
+      applied: number;
+    }[] = [];
     for (const inv of open) {
       if (remaining <= 0) break;
-      if (inv.orgId !== args.orgId || inv.balance <= 0) continue;
+      if (inv.orgId !== tenant.orgId || inv.balance <= 0) continue;
       const applied = Math.min(remaining, inv.balance);
-      const balance = inv.balance - applied;
-      await ctx.db.patch(inv._id, {
-        balance,
-        status:
-          balance <= 0 ? "paid" : balance < inv.total ? "partial" : inv.status,
+      allocations.push({
+        invoiceId: inv._id,
+        month: inv.month,
+        total: inv.total,
+        balance: inv.balance,
+        applied,
       });
-      allocations.push({ invoiceId: inv._id, amount: applied });
       remaining -= applied;
     }
-    return { allocations, leftover: remaining };
+    return { allocations, leftover: remaining } as never;
   },
 });
 

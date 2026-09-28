@@ -18,18 +18,20 @@ export const exportOrg = query({
     payments: v.array(v.any()),
     deposit_settlements: v.array(v.any()),
     mpesa_transactions: v.array(v.any()),
+    tenant_credits: v.array(v.any()),
+    credit_ledger: v.array(v.any()),
   }),
   handler: async (ctx, args) => {
     const caller = await assertOrgMember(ctx, args.orgId);
     if (caller.role === "tenant") {
       throw new Error("Staff only");
     }
-    const byOrg = (table: "properties" | "units" | "tenants" | "invoices" | "payments" | "depositSettlements" | "mpesaTransactions") =>
+    const byOrg = (table: "properties" | "units" | "tenants" | "invoices" | "payments" | "depositSettlements" | "mpesaTransactions" | "tenantCredits" | "creditLedger") =>
       ctx.db
         .query(table)
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .take(1000);
-    const [properties, units, tenants, invoices, payments, settlements, txs] =
+    const [properties, units, tenants, invoices, payments, settlements, txs, credits, ledger] =
       await Promise.all([
         byOrg("properties"),
         byOrg("units"),
@@ -38,6 +40,8 @@ export const exportOrg = query({
         byOrg("payments"),
         byOrg("depositSettlements"),
         byOrg("mpesaTransactions"),
+        byOrg("tenantCredits"),
+        byOrg("creditLedger"),
       ]);
     return {
       exportedAt: new Date().toISOString(),
@@ -48,6 +52,8 @@ export const exportOrg = query({
       payments,
       deposit_settlements: settlements,
       mpesa_transactions: txs,
+      tenant_credits: credits,
+      credit_ledger: ledger,
     };
   },
 });

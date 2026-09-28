@@ -22,7 +22,9 @@ function json(body: unknown, status = 200): Response {
 /**
  * Public M-Pesa STK callback (Safaricom cannot send auth headers).
  * The CheckoutRequestID is an unguessable capability linking the callback
- * to a pending row. Idempotent: retried success callbacks dedupe.
+ * to a pending row. Success writes go through one atomic mutation
+ * (reconcileSuccessInternal): retried or racing callbacks dedupe instead
+ * of writing a second payment. Failures just flip the tx row.
  */
 http.route({
   path: "/mpesa-callback",
@@ -78,6 +80,8 @@ http.route({
       typeof meta["MpesaReceiptNumber"] === "string"
         ? (meta["MpesaReceiptNumber"] as string)
         : undefined;
+    // Trust Daraja's reported amount (fallback: initiated amount) — the
+    // ledger stores what M-Pesa actually moved, not what was requested.
     const paidAmount =
       typeof meta["Amount"] === "number"
         ? Math.round(meta["Amount"] as number)
@@ -88,25 +92,36 @@ http.route({
         return json({ ok: true, deduplicated: true });
       }
       try {
-        const paymentId = await ctx.runMutation(
-          internal.payments.internalRecordStkPayment,
+        const reconciled = await ctx.runMutation(
+          internal.mpesaInternal.reconcileSuccessInternal,
           {
             orgId: tx.orgId,
             tenantId: tx.tenantId,
+            checkoutRequestId: cb.CheckoutRequestID,
             amount: paidAmount,
-            mpesaCode: receipt,
-            paidAt: Date.now(),
+            mpesaReceipt: receipt,
           },
         );
+        if (reconciled === null) {
+          return json({ error: "Could not reconcile payment" }, 500);
+        }
+        // Late success after a timeout sweep is still real money: keep the
+        // row flipped to success (reconcile does that) and say so, so
+        // staff reading the STK list know the earlier timeout was superseded.
+        const late = tx.status === "timeout" || tx.status === "failed";
         await ctx.runMutation(internal.mpesaInternal.updateTx, {
           checkoutRequestId: cb.CheckoutRequestID,
-          status: "success",
-          resultCode: code,
-          resultDesc: cb.ResultDesc,
+          resultDesc:
+            cb.ResultDesc ?? (late ? "Late success after timeout" : undefined),
           mpesaReceipt: receipt,
-          paymentId,
+          paidAmount,
         });
-        return json({ ok: true, paymentId });
+        return json({
+          ok: true,
+          paymentId: reconciled.paymentId,
+          deduplicated: reconciled.deduplicated || undefined,
+          late: late || undefined,
+        });
       } catch (e) {
         await ctx.runMutation(internal.mpesaInternal.updateTx, {
           checkoutRequestId: cb.CheckoutRequestID,

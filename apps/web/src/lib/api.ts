@@ -1,8 +1,10 @@
 import { convex } from "./convex";
 import { api } from "../../../../convex/_generated/api";
 import type {
+  AllocationPreview,
   ArrearsAging,
   CollectionMonth,
+  CreditLedgerEntry,
   DepositSettlement,
   DepositsAndCredits,
   Invoice,
@@ -10,6 +12,7 @@ import type {
   MpesaHealth,
   MpesaTransaction,
   Org,
+  PaymentRecordResult,
   PaymentsBreakdown,
   PaymentWithRefs,
   Property,
@@ -161,10 +164,16 @@ function toPayment(r: any): PaymentWithRefs {
     allocations: (r.allocations ?? []).map((a: any) => ({
       invoiceId: a.invoiceId,
       amount: a.amount,
+      month: a.month ?? undefined,
     })),
     receipt_no: r.receiptNo,
     recorded_by: r.recordedBy ?? null,
     note: r.note ?? null,
+    status: r.status ?? "active",
+    checkout_request_id: r.checkoutRequestId ?? null,
+    leftover_credit: r.leftoverCredit ?? 0,
+    reversed_at: r.reversedAt ? iso(r.reversedAt) : null,
+    reverse_reason: r.reverseReason ?? null,
     tenant: r.tenant
       ? {
           ...emptyTenant(r.tenant._id, r.orgId),
@@ -173,6 +182,44 @@ function toPayment(r: any): PaymentWithRefs {
           unit_id: r.tenant.unitId ?? null,
         }
       : null,
+  };
+}
+
+function toPaymentResult(r: any): PaymentRecordResult {
+  return {
+    id: r.id ?? r._id,
+    allocations: (r.allocations ?? []).map((a: any) => ({
+      invoiceId: a.invoiceId,
+      amount: a.amount,
+      month: a.month ?? undefined,
+    })),
+    leftover_credit: r.leftoverCredit ?? r.leftover ?? 0,
+    credit_used: r.creditUsed ?? r.credit_used ?? 0,
+  };
+}
+
+function toPreview(r: any): AllocationPreview {
+  return {
+    allocations: (r.allocations ?? []).map((a: any) => ({
+      invoiceId: a.invoiceId,
+      month: a.month,
+      total: a.total,
+      balance: a.balance,
+      applied: a.applied,
+    })),
+    leftover: r.leftover ?? 0,
+  };
+}
+
+function toCreditEntry(r: any): CreditLedgerEntry {
+  return {
+    id: r._id,
+    kind: r.kind,
+    amount: r.amount,
+    balance_after: r.balanceAfter,
+    payment_id: r.paymentId ?? null,
+    note: r.note ?? null,
+    created_at: iso(r._creationTime),
   };
 }
 
@@ -488,6 +535,47 @@ export async function getSettlement(
   }
 }
 
+export async function previewAllocation(
+  tenantId: string,
+  amount: number,
+): Promise<AllocationPreview> {
+  try {
+    const row = (await convex.query(
+      (api as any).invoices.previewAllocation,
+      { tenantId, amount },
+    )) as any;
+    return toPreview(row);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Prepaid-credit history for one tenant, newest first. */
+export async function getCreditLedger(
+  tenantId: string,
+): Promise<CreditLedgerEntry[]> {
+  try {
+    const rows = (await convex.query(
+      (api as any).tenants.getCreditLedger,
+      { tenantId },
+    )) as any[];
+    return rows.map(toCreditEntry);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Sweep a tenant's held credit onto open invoices now. Returns KES consumed. */
+export async function applyCreditNow(tenantId: string): Promise<number> {
+  try {
+    return (await convex.mutation((api as any).tenants.applyCreditNow, {
+      tenantId,
+    })) as number;
+  } catch (e) {
+    return err(e);
+  }
+}
+
 /** Prepaid credit held for a tenant (overpayments carried forward). */
 export async function getTenantCredit(tenantId: string): Promise<number> {
   try {
@@ -561,13 +649,12 @@ export async function updateInvoice(
   values: Partial<Invoice>,
 ): Promise<void> {
   try {
+    // Totals/balances are ledger-owned server-side; only due date + notes
+    // are editable so allocated money keeps adding up.
     await convex.mutation((api as any).invoices.updateInvoice, {
       id,
       notes: (values as any).notes ?? undefined,
       dueDate: (values as any).due_date,
-      total: values.total,
-      balance: values.balance,
-      status: values.status,
     });
   } catch (e) {
     return err(e);
@@ -614,9 +701,13 @@ export async function recordManualPayment(args: {
   mpesaCode: string | null;
   paidAt: string;
   note: string | null;
-}): Promise<string> {
+  /** Pay these invoices first (then FIFO across the rest). */
+  targets?: string[];
+  /** Spend the tenant's held prepaid credit before applying the cash. */
+  useCredit?: boolean;
+}): Promise<PaymentRecordResult> {
   try {
-    return (await convex.mutation(
+    const row = (await convex.mutation(
       (api as any).payments.recordManualPayment,
       {
         orgId: args.orgId,
@@ -626,8 +717,43 @@ export async function recordManualPayment(args: {
         mpesaCode: args.mpesaCode,
         paidAt: new Date(args.paidAt).getTime(),
         note: args.note,
+        targets: args.targets,
+        useCredit: args.useCredit,
       },
-    )) as string;
+    )) as any;
+    return toPaymentResult(row);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Void a wrongly-recorded payment: reverses allocations + created credit. */
+export async function voidPayment(
+  id: string,
+  reason: string,
+): Promise<{ credit_shortfall: number }> {
+  try {
+    const row = (await convex.mutation((api as any).payments.voidPayment, {
+      id,
+      reason,
+    })) as any;
+    return { credit_shortfall: row.creditShortfall ?? 0 };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Record that money from a payment was returned to the tenant. */
+export async function refundPayment(
+  id: string,
+  reason: string,
+): Promise<{ credit_shortfall: number }> {
+  try {
+    const row = (await convex.mutation((api as any).payments.refundPayment, {
+      id,
+      reason,
+    })) as any;
+    return { credit_shortfall: row.creditShortfall ?? 0 };
   } catch (e) {
     return err(e);
   }
@@ -909,6 +1035,8 @@ function toPaymentsBreakdown(r: any): PaymentsBreakdown {
       mpesa_code: x.mpesaCode ?? null,
       amount: x.amount,
       note: x.note ?? null,
+      status: x.status ?? "active",
+      allocation_summary: x.allocationSummary ?? null,
     })),
     truncated: r.truncated,
   };

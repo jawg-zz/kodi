@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { internalMutation } from "./_generated/server";
 import { decryptSecret } from "./lib/mpesaCrypto";
+import { recordPaymentCore } from "./lib/ledger";
 
 /**
  * Internal M-Pesa row helpers. Split out of mpesa.ts so the public actions
@@ -75,6 +76,7 @@ export const updateTx = internalMutation({
     resultDesc: v.optional(v.union(v.string(), v.null())),
     mpesaReceipt: v.optional(v.union(v.string(), v.null())),
     paymentId: v.optional(v.id("payments")),
+    paidAmount: v.optional(v.union(v.number(), v.null())),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -97,10 +99,69 @@ export const updateTx = internalMutation({
       patch.mpesaReceipt = args.mpesaReceipt ?? undefined;
     }
     if (args.paymentId !== undefined) patch.paymentId = args.paymentId;
+    if (args.paidAmount !== undefined && args.paidAmount !== null) {
+      patch.amount = args.paidAmount;
+    }
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(tx._id, patch as never);
     }
     return null;
+  },
+});
+
+/**
+ * Shared success reconciliation for one checkout: if a payment is already
+ * linked, return its id (idempotent retry); otherwise record the ledger
+ * payment (which atomically claims the checkout) and return the new id.
+ * The canonical amount/receipt come from the caller (callback metadata
+ * wins over the initiated amount because partial debits happen).
+ */
+export const reconcileSuccessInternal = internalMutation({
+  args: {
+    orgId: v.id("orgs"),
+    tenantId: v.id("tenants"),
+    checkoutRequestId: v.string(),
+    amount: v.number(),
+    mpesaReceipt: v.optional(v.string()),
+  },
+  returns: v.union(
+    v.object({ paymentId: v.id("payments"), deduplicated: v.boolean() }),
+    v.null(),
+  ),
+  handler: async (ctx, args) => {
+    const tx = await ctx.db
+      .query("mpesaTransactions")
+      .withIndex("by_checkout", (q) =>
+        q.eq("checkoutRequestId", args.checkoutRequestId),
+      )
+      .first();
+    if (tx === null) return null;
+    if (tx.paymentId !== undefined) {
+      return { paymentId: tx.paymentId, deduplicated: true };
+    }
+    const rounded = Math.round(args.amount);
+    if (!Number.isFinite(rounded) || rounded <= 0) return null;
+    const res = await recordPaymentCore(ctx, {
+      orgId: args.orgId,
+      tenantId: args.tenantId,
+      amount: rounded,
+      method: "mpesa_stk",
+      mpesaCode: args.mpesaReceipt,
+      checkoutRequestId: args.checkoutRequestId,
+      note: "M-Pesa STK Push",
+    });
+    // Mirror the Daraja-reported amount on the tx row so the STK list
+    // matches the ledger even when it differs from the initiated amount.
+    const fresh = await ctx.db
+      .query("mpesaTransactions")
+      .withIndex("by_checkout", (q) =>
+        q.eq("checkoutRequestId", args.checkoutRequestId),
+      )
+      .first();
+    if (fresh !== null && fresh.amount !== rounded) {
+      await ctx.db.patch(fresh._id, { amount: rounded });
+    }
+    return { paymentId: res.id, deduplicated: false };
   },
 });
 

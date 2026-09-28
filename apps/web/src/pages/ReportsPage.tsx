@@ -173,7 +173,7 @@ export function ReportsPage() {
     downloadCsv(
       `kodi-payments-${rangeSuffix}.csv`,
       toCsv(
-        ["Receipt", "Date", "Tenant", "Method", "M-Pesa code", "Amount (KES)", "Note"],
+        ["Receipt", "Date", "Tenant", "Method", "M-Pesa code", "Amount (KES)", "Status", "Applied to", "Note"],
         payments.rows.map((p) => [
           p.receipt_no,
           fmtDate(p.paid_at),
@@ -181,6 +181,8 @@ export function ReportsPage() {
           p.method,
           p.mpesa_code ?? "",
           p.amount,
+          p.status ?? "active",
+          p.allocation_summary ?? "",
           p.note ?? "",
         ]),
       ),
