@@ -68,8 +68,8 @@ export interface Tenant {
   full_name: string;
   phone: string;
   national_id: string;
-  /** Stable Paybill account code shown in the portal (may be empty pre-backfill). */
-  account_code?: string | null;
+  /** Stable Paybill account code — required since the creation invariant. */
+  account_code: string;
   unit_id: string | null;
   move_in_date: string | null;
   deposit_held: number;

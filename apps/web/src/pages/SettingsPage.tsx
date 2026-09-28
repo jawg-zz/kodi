@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { PLANS, currentMonthKey, formatKES, planByCode } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import {
-  backfillAccountCodes,
   countUnits,
   createProperty,
   createTenant,
@@ -14,6 +13,7 @@ import {
   inviteUser,
   listPayments,
   listStaff,
+  listTenants,
   recordManualPayment,
   registerC2bUrls,
   saveMpesaCreds,
@@ -634,16 +634,14 @@ function DataSection() {
         });
         paid += 1;
       }
+      // Ideal-fix proof: every tenant is born with its code — verify all
+      // 20 carry one and say so in the summary. Legacy rows (pre-invariant)
+      // are healed by the Tenants backfill, not here.
+      const fresh = await listTenants(org.id);
+      const coded = fresh.filter((t) => t.account_code).length;
       setMsg(
-        `Demo data loaded: 2 properties, 20 units, 20 tenants, 3 months of invoices — ${paid} paid in full, ${partial} partial, 2 in arrears, 1 holding credit.`,
+        `Demo data loaded: 2 properties, 20 units, 20 tenants, 3 months of invoices — ${paid} paid in full, ${partial} partial, 2 in arrears, 1 holding credit. Paybill codes on ${coded}/20 tenants.`,
       );
-      // Belt-and-suspenders: tenants created through createTenant already
-      // carry codes, but older demo rows predate the feature — backfill.
-      try {
-        await backfillAccountCodes(org.id);
-      } catch {
-        // Non-fatal: staff can assign from Tenants.
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

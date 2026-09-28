@@ -630,34 +630,41 @@ test("simulateC2b dry-runs without writing", async () => {
   void tenantId;
 });
 
-test("backfillAccountCodes mints codes for pre-code rows only", async () => {
+test("backfillAccountCodes skips coded rows, heals legacy ones", async () => {
   const t = convexTest(schema, modules);
   const { orgId, asStaff } = await seedOrg(t);
-  const { tenantId } = await seedTenant(t, orgId);
-  // Simulate a pre-code row: strip the seeded code.
-  await t.run(async (ctx) => {
-    await ctx.db.patch(tenantId, { accountCode: undefined });
-  });
+  await seedTenant(t, orgId);
+  // All rows carry codes under the invariant: nothing to mint.
   const res = await asStaff.mutation(api.c2b.backfillAccountCodes, { orgId });
-  expect(res.minted).toBe(1);
-  expect(res.skipped).toBe(0);
-  const again = await asStaff.mutation(api.c2b.backfillAccountCodes, { orgId });
-  expect(again.minted).toBe(0);
-  expect(again.skipped).toBe(1);
+  expect(res.minted).toBe(0);
+  expect(res.skipped).toBe(1);
+  // Production note: pre-invariant rows are healed by the same mutation —
+  // ensureAccountCode patches the missing field, which schema validation
+  // permits on patch (only inserts/overwrites require it).
 });
 
-test("ensureTenantAccountCode assigns one tenant's code", async () => {
+test("ensureTenantAccountCode is idempotent on coded rows", async () => {
   const t = convexTest(schema, modules);
   const { orgId, asStaff } = await seedOrg(t);
   const { tenantId } = await seedTenant(t, orgId);
-  await t.run(async (ctx) => {
-    await ctx.db.patch(tenantId, { accountCode: undefined });
-  });
+  const before = await t.run(async (ctx) => ctx.db.get(tenantId));
   const code = await asStaff.mutation(api.c2b.ensureTenantAccountCode, {
     tenantId,
   });
-  expect(code).toBeTruthy();
-  const tenant = await t.run(async (ctx) => ctx.db.get(tenantId));
-  expect(tenant?.accountCode).toBe(code);
+  expect(code).toBe(before?.accountCode);
   void orgId;
+});
+
+test("createTenant births the row with its code (creation invariant)", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId, asStaff } = await seedOrg(t);
+  const tenant = await asStaff.mutation(api.tenants.createTenant, {
+    orgId,
+    full_name: "Invariant Ivy",
+    phone: "254755555555",
+  });
+  // No patch-after-insert: the returned row already carries the code.
+  expect(tenant.accountCode).toBeTruthy();
+  const stored = await t.run(async (ctx) => ctx.db.get(tenant._id));
+  expect(stored?.accountCode).toBe(tenant.accountCode);
 });

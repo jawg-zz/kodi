@@ -126,6 +126,19 @@ export function TenantsPage() {
       {backfillMsg && (
         <p className="mb-4 text-sm text-green-700">{backfillMsg}</p>
       )}
+      {missingCodes > 0 && !backfillMsg && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          {missingCodes} tenant{missingCodes === 1 ? " has" : "s have"} no Paybill
+          account code — tenants can't self-serve Paybill until codes exist.{" "}
+          <button
+            onClick={handleBackfill}
+            disabled={backfillBusy}
+            className="font-medium underline hover:no-underline"
+          >
+            {backfillBusy ? "Assigning…" : "Assign all now"}
+          </button>
+        </div>
+      )}
 
       <div className="mb-4 max-w-sm">
         <Input placeholder="Search by name or phone…" value={q} onChange={(e) => setQ(e.target.value)} />

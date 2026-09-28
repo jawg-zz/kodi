@@ -8,7 +8,7 @@ import {
 import type { Id } from "./_generated/dataModel";
 import { assertOrgMember, assertStaff, audit } from "./lib/auth";
 import { consumeCreditInTx, addCreditInTx } from "./lib/credit";
-import { ensureAccountCode } from "./c2b";
+import { mintAccountCodeFor } from "./c2b";
 
 const tenantStatus = v.union(
   v.literal("active"),
@@ -23,7 +23,7 @@ const tenantShape = v.object({
   full_name: v.string(),
   phone: v.string(),
   national_id: v.string(),
-  accountCode: v.optional(v.string()),
+  accountCode: v.string(),
   unitId: v.optional(v.id("units")),
   move_in_date: v.optional(v.string()),
   deposit_held: v.number(),
@@ -288,19 +288,21 @@ export const createTenant = mutation({
     if (!Number.isFinite(deposit) || deposit < 0) {
       throw new ConvexError("Deposit must be a non-negative amount.");
     }
+    // Mint the Paybill code BEFORE insert: the row is born with its code,
+    // so no write path can ever produce a code-less tenant.
+    const accountCode = await mintAccountCodeFor(ctx, args.orgId, args.unitId);
     const id = await ctx.db.insert("tenants", {
       orgId: args.orgId,
       full_name: name,
       phone,
       national_id: (args.national_id ?? "").trim(),
+      accountCode,
       unitId: args.unitId,
       move_in_date: args.move_in_date,
       deposit_held: deposit,
       status: "active",
       notes: args.notes?.trim() || undefined,
     });
-    // Stable Paybill account code from day one (also the portal's C2B ref).
-    await ensureAccountCode(ctx, id);
     await syncUnitForTenant(ctx, id);
     await audit(ctx, {
       orgId: args.orgId,

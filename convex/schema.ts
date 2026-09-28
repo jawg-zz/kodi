@@ -103,11 +103,11 @@ export default defineSchema({
     phone: v.string(),
     national_id: v.string(),
     /**
-     * Stable Paybill account code (e.g. "KDI-7Q2X"). Shown in the portal;
-     * tenants type it as the M-Pesa account number so C2B hits match
-     * exactly. Assigned at creation; backfilled lazily for older rows.
+     * Stable Paybill account code (e.g. "GC-A1"). Required: minted in the
+     * same transaction as tenant creation, so no write path can produce a
+     * code-less row. Pre-code legacy rows are healed by backfillAccountCodes.
      */
-    accountCode: v.optional(v.string()),
+    accountCode: v.string(),
     unitId: v.optional(v.id("units")),
     move_in_date: v.optional(v.string()),
     deposit_held: v.number(),

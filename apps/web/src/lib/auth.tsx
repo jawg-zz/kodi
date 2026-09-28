@@ -158,6 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           full_name: myOrg.tenant.full_name,
           phone: myOrg.tenant.phone,
           national_id: myOrg.tenant.national_id,
+          account_code: (myOrg.tenant as { accountCode?: string }).accountCode ?? "",
           unit_id: myOrg.tenant.unitId ?? null,
           move_in_date: myOrg.tenant.move_in_date ?? null,
           deposit_held: myOrg.tenant.deposit_held,

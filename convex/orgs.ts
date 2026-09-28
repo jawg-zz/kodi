@@ -42,6 +42,7 @@ export const myOrg = query({
           full_name: v.string(),
           phone: v.string(),
           national_id: v.string(),
+          accountCode: v.string(),
           unitId: v.optional(v.id("units")),
           move_in_date: v.optional(v.string()),
           deposit_held: v.number(),

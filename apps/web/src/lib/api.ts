@@ -73,7 +73,8 @@ function emptyTenant(id: string, orgId: string): Tenant {
     full_name: "",
     phone: "",
     national_id: "",
-    account_code: null,
+    // Placeholder for ref-hydration only; server rows always carry a code.
+    account_code: "",
     unit_id: null,
     move_in_date: null,
     deposit_held: 0,
@@ -89,7 +90,9 @@ function toTenant(r: any): Tenant {
     full_name: r.full_name,
     phone: r.phone,
     national_id: r.national_id ?? "",
-    account_code: r.accountCode ?? null,
+    // Required since the creation invariant; legacy rows fall back to ""
+    // and the staff backfill heals them.
+    account_code: r.accountCode ?? "",
     unit_id: r.unitId ?? null,
     move_in_date: r.move_in_date ?? null,
     deposit_held: r.deposit_held ?? 0,
@@ -419,7 +422,8 @@ export async function getTenant(id: string): Promise<Tenant | null> {
 
 export async function createTenant(
   orgId: string,
-  values: Omit<Tenant, "id" | "org_id" | "status" | "notes"> & {
+  // account_code is server-minted at creation — callers never supply it.
+  values: Omit<Tenant, "id" | "org_id" | "status" | "notes" | "account_code"> & {
     notes?: string;
   },
 ): Promise<Tenant> {

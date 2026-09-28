@@ -66,6 +66,7 @@ async function seedProperty(
       full_name: "Jane Tenant",
       phone: "254700000001",
       national_id: "123",
+      accountCode: "GC-A1",
       unitId: occupiedUnit,
       deposit_held: 20000,
       status: "active",

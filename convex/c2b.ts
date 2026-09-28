@@ -103,7 +103,7 @@ async function uniqueAccountCode(
   return `KDI-${Date.now().toString(36).toUpperCase().slice(-4)}`;
 }
 
-/** Ensure the tenant has an account code (backfills older rows). */
+/** Ensure the tenant has an account code (legacy backfill path only). */
 export async function ensureAccountCode(
   ctx: MutationCtx,
   tenantId: Id<"tenants">,
@@ -111,23 +111,33 @@ export async function ensureAccountCode(
   const tenant = await ctx.db.get(tenantId);
   if (tenant === null) throw new ConvexError("Tenant not found");
   if (tenant.accountCode) return tenant.accountCode;
+  const code = await mintAccountCodeFor(ctx, tenant.orgId, tenant.unitId);
+  await ctx.db.patch(tenantId, { accountCode: code });
+  return code;
+}
+
+/**
+ * Mint a fresh unique code for a new tenant, in-transaction: smart
+ * property-unit code first, suffixed variants, then the random scheme.
+ * Called BEFORE the tenant insert so the row is born with its code.
+ */
+export async function mintAccountCodeFor(
+  ctx: MutationCtx,
+  orgId: Id<"orgs">,
+  unitId: Id<"units"> | undefined,
+): Promise<string> {
   let preferred: string | null = null;
-  if (tenant.unitId !== undefined) {
-    const unit = await ctx.db.get(tenant.unitId);
-    if (unit !== null && unit.orgId === tenant.orgId) {
+  if (unitId !== undefined) {
+    const unit = await ctx.db.get(unitId);
+    if (unit !== null && unit.orgId === orgId) {
       const property =
         unit.propertyId === undefined
           ? null
           : await ctx.db.get(unit.propertyId);
-      preferred = smartAccountCode(
-        property?.name,
-        unit.label,
-      );
+      preferred = smartAccountCode(property?.name, unit.label);
     }
   }
-  const code = await uniqueAccountCode(ctx, preferred);
-  await ctx.db.patch(tenantId, { accountCode: code });
-  return code;
+  return await uniqueAccountCode(ctx, preferred);
 }
 
 export type C2bPayload = {
@@ -899,8 +909,9 @@ export const getPaybillInfo = query({
     if (creds === null || !creds.consumerKeyEnc) return null;
     return {
       shortcode: creds.shortcode,
-      // Portal reads only — code minted at tenant creation / backfilled by
-      // staff flow; never mint inside a query (queries cannot write).
+      // Required at creation since the invariant landed; legacy rows fall
+      // back to "" and the staff backfill heals them. Never mint inside a
+      // query (queries cannot write).
       accountCode: tenant.accountCode ?? "",
       registered: creds.c2bRegistered ?? false,
     };
