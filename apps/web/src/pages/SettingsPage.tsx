@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { PLANS, currentMonthKey, formatKES, planByCode } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import {
+  clearDemoData,
   countUnits,
   createProperty,
   createTenant,
   createUnit,
+  demoStatus,
   exportOrgBackup,
   generateInvoices,
   getC2bStatus,
@@ -679,6 +681,7 @@ function DataSection() {
           <Button variant="secondary" onClick={exportJson} disabled={busy}>Export backup (JSON)</Button>
           <Button variant="secondary" onClick={() => listPayments(org!.id).then(() => setMsg("Data looks reachable."))} disabled={busy}>Test connection</Button>
         </div>
+        <DemoClearSection onDone={(m) => setMsg(m)} onError={(m) => setError(m)} />
         {error && <div className="mt-2 max-w-lg"><ErrorBanner message={error} /></div>}
         {msg && <p className="mt-2 text-sm text-green-700">{msg}</p>}
         <p className="mt-2 max-w-lg text-xs text-slate-400">
@@ -687,5 +690,66 @@ function DataSection() {
         </p>
       </CardBody>
     </Card>
+  );
+}
+
+/**
+ * One-click demo removal: shows what "(Demo)" data exists, confirms, then
+ * clears in dependency order (payments voided first). Real rows untouched.
+ */
+function DemoClearSection({ onDone, onError }: {
+  onDone: (m: string) => void;
+  onError: (m: string) => void;
+}) {
+  const [status, setStatus] = useState<{ tenants: number; properties: number } | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    demoStatus()
+      .then((s) => setStatus({ tenants: s.tenants, properties: s.properties }))
+      .catch(() => setStatus(null));
+  }, []);
+
+  if (status === null || status.tenants === 0) return null;
+
+  const clear = async () => {
+    setBusy(true);
+    try {
+      const r = await clearDemoData();
+      setConfirming(false);
+      setStatus({ tenants: 0, properties: 0 });
+      onDone(
+        `Demo data removed: ${r.properties} properties, ${r.units} units, ${r.tenants} tenants, ${r.invoices} invoices, ${r.paymentsVoided} payments voided.`,
+      );
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 max-w-lg rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+      {confirming ? (
+        <>
+          <p className="font-semibold">
+            Remove all demo data? {status.tenants} tenants in {status.properties} demo properties, plus their invoices and payments.
+          </p>
+          <p className="mt-1 text-xs">Payments are voided first (audited), then everything demo is deleted. Real data is never touched. This cannot be undone — export a backup first if unsure.</p>
+          <div className="mt-2 flex gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setConfirming(false)} disabled={busy}>Keep demo data</Button>
+            <Button size="sm" onClick={clear} disabled={busy}>{busy ? "Removing…" : "Yes, remove demo data"}</Button>
+          </div>
+        </>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p>
+            Demo data present: {status.tenants} tenants in {status.properties} properties.
+          </p>
+          <Button size="sm" variant="secondary" onClick={() => setConfirming(true)}>Remove demo data…</Button>
+        </div>
+      )}
+    </div>
   );
 }

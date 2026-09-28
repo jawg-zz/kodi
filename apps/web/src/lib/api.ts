@@ -1179,6 +1179,36 @@ export async function exportOrgBackup(
   }
 }
 
+export interface DemoSummary {
+  properties: number;
+  units: number;
+  tenants: number;
+  invoices: number;
+  paymentsVoided: number;
+  paymentsDeleted: number;
+}
+
+/** How much "(Demo)" data exists in the org. */
+export async function demoStatus(): Promise<DemoSummary> {
+  try {
+    return (await convex.query((api as any).demo.demoStatus, {})) as DemoSummary;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Remove all demo data (voids payments first, then deletes down the tree). */
+export async function clearDemoData(): Promise<DemoSummary> {
+  try {
+    return (await convex.mutation(
+      (api as any).demo.clearDemoData,
+      {},
+    )) as DemoSummary;
+  } catch (e) {
+    return err(e);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Reports (server-aggregated)
 // ---------------------------------------------------------------------------

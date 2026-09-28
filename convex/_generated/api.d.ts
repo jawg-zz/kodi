@@ -10,6 +10,7 @@
 
 import type * as crons from "../crons.js";
 import type * as c2b from "../c2b.js";
+import type * as demo from "../demo.js";
 import type * as export_ from "../export.js";
 import type * as helpers from "../helpers.js";
 import type * as http from "../http.js";
@@ -36,6 +37,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   c2b: typeof c2b;
+  demo: typeof demo;
   export: typeof export_;
   helpers: typeof helpers;
   http: typeof http;
