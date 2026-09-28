@@ -13,7 +13,6 @@ import {
   inviteUser,
   listPayments,
   listStaff,
-  listTenants,
   recordManualPayment,
   registerC2bUrls,
   saveMpesaCreds,
@@ -507,7 +506,23 @@ function SimulatorSection() {
 }
 
 // ---------------------------------------------------------------------------
-const DEMO_MONTHS = [0, -1];
+const DEMO_MONTHS = [0, -1, -2];
+
+const DEMO_FIRST = [
+  "Jane", "John", "Mary", "Peter", "Grace", "David", "Sarah", "Michael",
+  "Faith", "James", "Lucy", "Daniel", "Ann", "Paul", "Esther", "Samuel",
+  "Ruth", "Stephen", "Beatrice", "Francis",
+];
+const DEMO_LAST = [
+  "Wanjiku", "Otieno", "Achieng", "Kamau", "Njeri", "Mwangi", "Atieno",
+  "Ochieng", "Nyambura", "Kiptoo", "Cherono", "Mutiso", "Wafula",
+  "Ouma", "Waithera", "Kariuki", "Moraa", "Onyango", "Wambui", "Maina",
+];
+
+/** Deterministic demo phone per index (2547XXXXXXXX, valid Safaricom range). */
+function demoPhone(i: number): string {
+  return `2547${String(220000000 + i * 137913).slice(0, 9)}`;
+}
 
 function DataSection() {
   const { org } = useAuth();
@@ -521,34 +536,61 @@ function DataSection() {
     setError(null);
     setMsg(null);
     try {
-      const prop = await createProperty(org.id, {
-        name: "Baraka Court (Demo)",
-        property_type: "apartments",
-        location: "Kilimani, Nairobi",
-        notes: "Demo data — delete when done exploring.",
-      });
+      // Two demo properties, 20 tenants total: mixed rents, one bedsitter
+      // block + one apartment block, so reports/filters have shape.
       const specs = [
-        { label: "A1", rent: 25000, water: 500, garbage: 300, name: "Jane Wanjiku", phone: "254722111111" },
-        { label: "A2", rent: 18000, water: 400, garbage: 300, name: "John Otieno", phone: "254733222222" },
-        { label: "B1", rent: 12000, water: 300, garbage: 200, name: "Mary Achieng", phone: "254744333333" },
+        {
+          name: "Baraka Court (Demo)",
+          property_type: "apartments" as const,
+          location: "Kilimani, Nairobi",
+          units: Array.from({ length: 12 }, (_, i) => ({
+            label: `A${i + 1}`,
+            rent: [25000, 25000, 22000, 22000, 20000, 20000, 18000, 18000, 28000, 28000, 24000, 24000][i],
+            water: 500,
+            garbage: 300,
+          })),
+        },
+        {
+          name: "Maweni Bedsitters (Demo)",
+          property_type: "bedsitters" as const,
+          location: "Kasarani, Nairobi",
+          units: Array.from({ length: 8 }, (_, i) => ({
+            label: `B${i + 1}`,
+            rent: [12000, 12000, 10500, 10500, 13500, 13500, 11000, 11000][i],
+            water: 300,
+            garbage: 200,
+          })),
+        },
       ];
-      for (const s of specs) {
-        const unit = await createUnit(org.id, {
-          property_id: prop.id,
-          label: s.label,
-          unit_type: "one_br",
-          rent_amount: s.rent,
-          water_charge: s.water,
-          garbage_charge: s.garbage,
+      let tenantIdx = 0;
+      const created: { id: string; rent: number }[] = [];
+      for (const p of specs) {
+        const prop = await createProperty(org.id, {
+          name: p.name,
+          property_type: p.property_type,
+          location: p.location,
+          notes: "Demo data — delete when done exploring.",
         });
-        await createTenant(org.id, {
-          full_name: s.name,
-          phone: s.phone,
-          national_id: "",
-          unit_id: unit.id,
-          move_in_date: "2026-06-01",
-          deposit_held: s.rent,
-        });
+        for (const u of p.units) {
+          const unit = await createUnit(org.id, {
+            property_id: prop.id,
+            label: u.label,
+            unit_type: p.property_type === "bedsitters" ? "bedsitter" : "one_br",
+            rent_amount: u.rent,
+            water_charge: u.water,
+            garbage_charge: u.garbage,
+          });
+          const i = tenantIdx++;
+          const tenant = await createTenant(org.id, {
+            full_name: `${DEMO_FIRST[i]} ${DEMO_LAST[i]}`,
+            phone: demoPhone(i),
+            national_id: String(20000000 + i * 73111),
+            unit_id: unit.id,
+            move_in_date: "2026-04-01",
+            deposit_held: u.rent,
+          });
+          created.push({ id: tenant.id, rent: u.rent + u.water + u.garbage });
+        }
       }
       for (const back of DEMO_MONTHS) {
         const d = new Date();
@@ -556,21 +598,44 @@ function DataSection() {
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
         await generateInvoices(org.id, key);
       }
-      // One demo cash payment against the oldest open invoice of the first tenant.
-      const tenants = await listTenants(org.id);
-      const demo = tenants.find((t) => t.full_name === "Jane Wanjiku");
-      if (demo) {
+      // Realistic payment spread: most pay in full, a few partial, a few
+      // late, one overpays into credit, two pay nothing (arrears showcase).
+      const nowIso = new Date().toISOString();
+      let paid = 0;
+      let partial = 0;
+      for (let i = 0; i < created.length; i++) {
+        const c = created[i];
+        if (i >= 18) continue; // last two: unpaid, drive arrears aging
+        if (i % 7 === 3) {
+          // Partial payer: half of one month's rent.
+          await recordManualPayment({
+            orgId: org.id,
+            tenantId: c.id,
+            amount: Math.round(c.rent / 2),
+            method: "cash",
+            mpesaCode: null,
+            paidAt: nowIso,
+            note: "Demo partial payment",
+          });
+          partial += 1;
+          continue;
+        }
+        const method = i % 3 === 0 ? "mpesa_manual" : i % 3 === 1 ? "cash" : "bank";
         await recordManualPayment({
           orgId: org.id,
-          tenantId: demo.id,
-          amount: 10000,
-          method: "cash",
-          mpesaCode: null,
-          paidAt: new Date().toISOString(),
+          tenantId: c.id,
+          // First tenant overpays two months + 2,000 to showcase credit.
+          amount: i === 0 ? c.rent * 2 + 2000 : c.rent * 2,
+          method: method as "mpesa_manual" | "cash" | "bank",
+          mpesaCode: method === "mpesa_manual" ? `DEMO${String(100000 + i)}` : null,
+          paidAt: nowIso,
           note: "Demo payment",
         });
+        paid += 1;
       }
-      setMsg("Demo data loaded: 1 property, 3 units, 3 tenants, invoices for this and last month, plus one payment.");
+      setMsg(
+        `Demo data loaded: 2 properties, 20 units, 20 tenants, 3 months of invoices — ${paid} paid in full, ${partial} partial, 2 in arrears, 1 holding credit.`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
