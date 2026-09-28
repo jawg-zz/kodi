@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { assertOrgMember, assertStaff, audit } from "./lib/auth";
 import { recordPaymentCore, reversePaymentInTx } from "./lib/ledger";
@@ -7,6 +7,7 @@ import { recordPaymentCore, reversePaymentInTx } from "./lib/ledger";
 const paymentMethod = v.union(
   v.literal("mpesa_stk"),
   v.literal("mpesa_manual"),
+  v.literal("mpesa_c2b"),
   v.literal("cash"),
   v.literal("bank"),
 );
@@ -145,6 +146,7 @@ export const recordManualPayment = mutation({
     amount: v.number(),
     method: v.union(
       v.literal("mpesa_manual"),
+      v.literal("mpesa_c2b"),
       v.literal("cash"),
       v.literal("bank"),
     ),
@@ -266,7 +268,8 @@ export const internalRecordStkPayment = internalMutation({
 /**
  * Staff: void a wrongly-recorded payment (wrong tenant, wrong amount, test
  * entry). Reverses allocations + created credit; the row stays for the
- * audit trail but drops out of totals.
+ * audit trail but drops out of totals. At or above the org's reversal
+ * limit only the owner may void.
  */
 export const voidPayment = mutation({
   args: { id: v.id("payments"), reason: v.string() },
@@ -275,6 +278,7 @@ export const voidPayment = mutation({
     const payment = await ctx.db.get(args.id);
     if (payment === null) throw new ConvexError("Payment not found");
     const caller = await assertStaff(ctx, payment.orgId);
+    await assertReversalAllowed(ctx, payment.orgId, payment.amount, caller);
     const reason = args.reason.trim();
     if (reason === "") throw new ConvexError("Give a reason for the void.");
     const res = await reversePaymentInTx(ctx, args.id, "voided", reason, caller.userId);
@@ -298,7 +302,8 @@ export const voidPayment = mutation({
 /**
  * Staff: record that money from a payment was returned to the tenant
  * (duplicate charge, STK double-debit settled off-platform). Same ledger
- * reversal as a void, tracked under its own audit action.
+ * reversal as a void, tracked under its own audit action. Same owner
+ * threshold as voids.
  */
 export const refundPayment = mutation({
   args: { id: v.id("payments"), reason: v.string() },
@@ -307,6 +312,7 @@ export const refundPayment = mutation({
     const payment = await ctx.db.get(args.id);
     if (payment === null) throw new ConvexError("Payment not found");
     const caller = await assertStaff(ctx, payment.orgId);
+    await assertReversalAllowed(ctx, payment.orgId, payment.amount, caller);
     const reason = args.reason.trim();
     if (reason === "") throw new ConvexError("Describe how the refund was made.");
     const res = await reversePaymentInTx(ctx, args.id, "refunded", reason, caller.userId);
@@ -326,5 +332,27 @@ export const refundPayment = mutation({
     return res;
   },
 });
+
+const DEFAULT_REVERSAL_LIMIT = 50_000;
+
+/**
+ * Owner gate for large reversals: at or above the org's limit (default
+ * KES 50,000) only the owner may void/refund. Prevents a compromised or
+ * careless manager account from unwinding big money alone.
+ */
+async function assertReversalAllowed(
+  ctx: MutationCtx,
+  orgId: Id<"orgs">,
+  amount: number,
+  caller: { userId: string; role: "owner" | "manager" },
+): Promise<void> {
+  const org = await ctx.db.get(orgId);
+  const limit = org?.reversal_limit ?? DEFAULT_REVERSAL_LIMIT;
+  if (limit > 0 && amount >= limit && caller.role !== "owner") {
+    throw new ConvexError(
+      `Reversals of ${amount.toLocaleString("en-US")} KES or more need the business owner.`,
+    );
+  }
+}
 
 export { paymentShape };

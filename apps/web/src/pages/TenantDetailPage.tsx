@@ -187,6 +187,14 @@ export function TenantDetailPage() {
             <div className="mt-3 space-y-1 text-sm">
               <p><span className="text-slate-500">Phone:</span> {tenant.phone}</p>
               <p><span className="text-slate-500">National ID:</span> {tenant.national_id || "—"}</p>
+              <p>
+                <span className="text-slate-500">Paybill account:</span>{" "}
+                {tenant.account_code ? (
+                  <strong>{tenant.account_code}</strong>
+                ) : (
+                  <span className="text-slate-400">assigning…</span>
+                )}
+              </p>
               <p><span className="text-slate-500">Deposit held:</span> <Money value={tenant.deposit_held} /></p>
             </div>
             <div className="mt-4 space-y-2 border-t border-slate-100 pt-3">

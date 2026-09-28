@@ -11,7 +11,9 @@ import {
 import { useAuth } from "../lib/auth";
 import {
   getArrearsAging,
+  getAuditTrail,
   getCollectionSummary,
+  getDailyClose,
   getDepositsAndCredits,
   getMpesaHealth,
   getPaymentsBreakdown,
@@ -20,7 +22,9 @@ import {
 } from "../lib/api";
 import type {
   ArrearsAging,
+  AuditEvent,
   CollectionMonth,
+  DailyClose,
   DepositsAndCredits,
   MpesaHealth,
   PaymentsBreakdown,
@@ -80,6 +84,8 @@ export function ReportsPage() {
   const [mpesa, setMpesa] = useState<MpesaHealth | null>(null);
   const [rentRoll, setRentRoll] = useState<RentRoll | null>(null);
   const [deposits, setDeposits] = useState<DepositsAndCredits | null>(null);
+  const [dailyClose, setDailyClose] = useState<DailyClose | null>(null);
+  const [audit, setAudit] = useState<AuditEvent[]>([]);
 
   const [start, end] = monthsForPreset(preset, startMonth, endMonth);
   const propFilter = propertyId === "all" ? undefined : propertyId;
@@ -97,7 +103,7 @@ export function ReportsPage() {
         startMs: monthStartMs(months[0]),
         endMs: monthStartMs(addMonths(months[months.length - 1], 1)),
       };
-      const [props, coll, arr, pay, mpe, roll, dep] = await Promise.all([
+      const [props, coll, arr, pay, mpe, roll, dep, close, trail] = await Promise.all([
         listProperties(org.id),
         getCollectionSummary({ orgId: org.id, startMonth: s, endMonth: e, propertyId: propFilter }),
         getArrearsAging({ orgId: org.id, propertyId: propFilter }),
@@ -105,6 +111,8 @@ export function ReportsPage() {
         getMpesaHealth({ orgId: org.id, ...windowMs }),
         getRentRoll({ orgId: org.id, propertyId: propFilter }),
         getDepositsAndCredits({ orgId: org.id, propertyId: propFilter }),
+        getDailyClose({ orgId: org.id, ...windowMs }).catch(() => null),
+        getAuditTrail(org.id).catch(() => []),
       ]);
       setProperties(props);
       setCollection(coll);
@@ -113,6 +121,8 @@ export function ReportsPage() {
       setMpesa(mpe);
       setRentRoll(roll);
       setDeposits(dep);
+      setDailyClose(close);
+      setAudit(trail);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -428,6 +438,15 @@ export function ReportsPage() {
                 ({mpesa?.success_rate ?? 0}% success)
               </span>
             </h2>
+            {(mpesa?.channels ?? []).length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-2">
+                {mpesa!.channels.map((c) => (
+                  <Badge key={c.channel} tone={c.count > 0 ? "blue" : "slate"}>
+                    {c.channel}: {c.count} · {fmtKES(c.amount)}
+                  </Badge>
+                ))}
+              </div>
+            )}
             {!mpesa || mpesa.total === 0 ? (
               <p className="text-sm text-slate-500">No M-Pesa attempts in this range.</p>
             ) : (
@@ -444,7 +463,7 @@ export function ReportsPage() {
                     {mpesa.by_status.map((s) => (
                       <tr key={s.status} className="hover:bg-slate-50">
                         <td className="py-2 pr-3">
-                          <Badge tone={s.status === "success" ? "green" : s.status === "pending" ? "amber" : "red"}>
+                          <Badge tone={/success|matched/.test(s.status) ? "green" : /pending/.test(s.status) ? "amber" : "red"}>
                             {s.status}
                           </Badge>
                         </td>
@@ -459,6 +478,85 @@ export function ReportsPage() {
           </CardBody>
         </Card>
       </div>
+
+      <Card className="mt-4">
+        <CardBody>
+          <h2 className="mb-1 font-semibold">Daily close</h2>
+          <p className="mb-3 text-sm text-slate-500">
+            Cash received per day with method and recorder split — sign off each day's money.
+            {dailyClose && <> Total <Money value={dailyClose.total} className="font-semibold" /> across {dailyClose.count} payments.</>}
+          </p>
+          {!dailyClose || dailyClose.rows.length === 0 ? (
+            <p className="text-sm text-slate-500">No cash received in this range.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                    <th className="py-2 pr-3">Day</th>
+                    <th className="py-2 pr-3 text-right">Payments</th>
+                    <th className="py-2 pr-3">Methods</th>
+                    <th className="py-2 pr-3">Recorded by</th>
+                    <th className="py-2 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dailyClose.rows.slice(0, 31).map((d) => (
+                    <tr key={d.day} className="hover:bg-slate-50">
+                      <td className="py-2 pr-3 font-medium">{d.day}</td>
+                      <td className="py-2 pr-3 text-right">{d.count}</td>
+                      <td className="py-2 pr-3 text-xs text-slate-500">
+                        {d.by_method.map((m) => `${paymentMethodLabel(m.method)} ${fmtKES(m.total)}`).join(" · ")}
+                      </td>
+                      <td className="py-2 pr-3 text-xs text-slate-500">
+                        {d.by_recorder.slice(0, 3).map((r) => `${r.recorder === "M-Pesa auto" ? "M-Pesa auto" : `staff ${r.recorder.slice(0, 8)}`} ${fmtKES(r.total)}`).join(" · ")}
+                      </td>
+                      <td className="py-2 text-right"><Money value={d.collected} className="font-semibold" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+      <Card className="mt-4">
+        <CardBody>
+          <h2 className="mb-1 font-semibold">Audit trail</h2>
+          <p className="mb-3 text-sm text-slate-500">
+            Every ledger-touching event: payments, voids, refunds, C2B matches, credit sweeps.
+          </p>
+          {audit.length === 0 ? (
+            <p className="text-sm text-slate-500">No audit events yet.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                    <th className="py-2 pr-3">When</th>
+                    <th className="py-2 pr-3">Action</th>
+                    <th className="py-2 pr-3">Entity</th>
+                    <th className="py-2">Detail</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {audit.slice(0, 50).map((a) => (
+                    <tr key={a.id} className="hover:bg-slate-50">
+                      <td className="py-2 pr-3 text-xs text-slate-500">
+                        {new Date(a.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      </td>
+                      <td className="py-2 pr-3"><Badge tone="slate">{a.action}</Badge></td>
+                      <td className="py-2 pr-3 text-xs text-slate-500">{a.entity_type}{a.entity_id ? ` ${a.entity_id.slice(0, 8)}` : ""}</td>
+                      <td className="py-2 text-xs text-slate-500">{a.metadata ? a.metadata.slice(0, 120) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardBody>
+      </Card>
 
       <Card className="mt-4">
         <CardBody>

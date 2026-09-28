@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { formatDate, formatDateTime, formatKES, monthLabel } from "@kodi/shared";
 import {
   getInvoice,
+  getPaybillInfo,
   getPayment,
   getSettlement,
   getTenant,
@@ -76,6 +77,7 @@ export function InvoiceDocPage() {
   const { org } = useAuth();
   const [inv, setInv] = useState<(InvoiceWithRefs & { tenant: (Tenant & { unit_label?: string }) | null }) | null>(null);
   const [orgName, setOrgName] = useState("Kodi");
+  const [paybill, setPaybill] = useState<{ shortcode: string; account_code: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -85,6 +87,14 @@ export function InvoiceDocPage() {
       else {
         setInv(data as typeof inv);
         setOrgName(await fetchOrgName(org?.name ?? null));
+        try {
+          const pb = await getPaybillInfo(data.tenant_id);
+          if (pb?.registered && pb.account_code) {
+            setPaybill({ shortcode: pb.shortcode, account_code: pb.account_code });
+          }
+        } catch {
+          // Paybill block is a nicety — the invoice stands without it.
+        }
       }
     }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -120,6 +130,12 @@ export function InvoiceDocPage() {
       <p className="mt-4 text-sm text-slate-600">
         Please pay {formatKES(inv.balance)} on or before {formatDate(inv.due_date)} via M-Pesa to avoid late penalties.
       </p>
+      {paybill && inv.balance > 0 && (
+        <div className="mt-3 rounded border border-slate-300 p-3 text-sm">
+          <p className="font-semibold">Pay via M-Pesa Paybill</p>
+          <p>Business no: <strong>{paybill.shortcode}</strong> · Account no: <strong>{paybill.account_code}</strong> · Amount: <Money value={inv.balance} className="font-semibold" /></p>
+        </div>
+      )}
     </DocShell>
   );
 }
@@ -208,6 +224,7 @@ export function StatementDocPage() {
   const [payments, setPayments] = useState<PaymentWithRefs[]>([]);
   const [credit, setCredit] = useState(0);
   const [orgName, setOrgName] = useState("Kodi");
+  const [paybill, setPaybill] = useState<{ shortcode: string; account_code: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -228,6 +245,14 @@ export function StatementDocPage() {
           setCredit(await getTenantCredit(tenantId));
         } catch {
           setCredit(0);
+        }
+        try {
+          const pb = await getPaybillInfo(tenantId);
+          if (pb?.registered && pb.account_code) {
+            setPaybill({ shortcode: pb.shortcode, account_code: pb.account_code });
+          }
+        } catch {
+          // Paybill block is a nicety — the statement stands without it.
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -272,6 +297,12 @@ export function StatementDocPage() {
             <Money key="a" value={p.amount} />,
           ])}
       />
+      {paybill && netOwed > 0 && (
+        <div className="mt-3 rounded border border-slate-300 p-3 text-sm">
+          <p className="font-semibold">Pay the balance via M-Pesa Paybill</p>
+          <p>Business no: <strong>{paybill.shortcode}</strong> · Account no: <strong>{paybill.account_code}</strong> · Amount: <Money value={netOwed} className="font-semibold" /></p>
+        </div>
+      )}
     </DocShell>
   );
 }

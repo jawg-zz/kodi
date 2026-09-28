@@ -21,7 +21,7 @@ export type UnitType =
 export type UnitStatus = "vacant" | "occupied" | "notice";
 export type TenantStatus = "active" | "notice" | "moved_out";
 export type InvoiceStatus = "unpaid" | "partial" | "paid";
-export type PaymentMethod = "mpesa_stk" | "mpesa_manual" | "cash" | "bank";
+export type PaymentMethod = "mpesa_stk" | "mpesa_manual" | "mpesa_c2b" | "cash" | "bank";
 export type MpesaTxStatus = "pending" | "success" | "failed" | "timeout";
 
 export interface InvoiceLines {

@@ -64,6 +64,7 @@ export function UnitStatusBadge({ status }: { status: string }) {
 const paymentMethodLabels: Record<string, string> = {
   mpesa_stk: "M-Pesa (STK)",
   mpesa_manual: "M-Pesa (manual)",
+  mpesa_c2b: "M-Pesa (Paybill)",
   cash: "Cash",
   bank: "Bank",
 };

@@ -1,7 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { query, type QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { assertStaff, isMonthKey } from "./lib/auth";
+import { assertOrgMember, assertStaff, isMonthKey } from "./lib/auth";
 
 const DAY_MS = 86_400_000;
 const MAX_MONTHS = 37;
@@ -109,6 +109,55 @@ const collectionMonth = v.object({
   outstanding: v.number(),
   rate: v.number(),
   invoiceCount: v.number(),
+});
+
+/**
+ * Single-org cash snapshot for one month: invoice totals plus actual cash
+ * received in the month (paidAt window, active rows only). The dashboard
+ * uses this instead of expected-minus-outstanding so catch-up payments,
+ * voids and refunds can't make the two pages disagree.
+ */
+export const monthCashSnapshot = query({
+  args: { orgId: v.id("orgs"), month: v.string() },
+  returns: v.object({
+    month: v.string(),
+    expected: v.number(),
+    collected: v.number(),
+    outstanding: v.number(),
+    rate: v.number(),
+    invoiceCount: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    await assertStaff(ctx, args.orgId);
+    if (!isMonthKey(args.month)) throw new ConvexError("Invalid month key");
+    const rows = await ctx.db
+      .query("invoices")
+      .withIndex("by_org_month", (q) =>
+        q.eq("orgId", args.orgId).eq("month", args.month),
+      )
+      .collect();
+    const expected = rows.reduce((s, r) => s + r.total, 0);
+    const outstanding = rows.reduce((s, r) => s + r.balance, 0);
+    const startMs = monthStartMs(args.month);
+    const endMs = monthStartMs(addMonthsKey(args.month, 1));
+    const payments = await ctx.db
+      .query("payments")
+      .withIndex("by_org_paidAt", (q) =>
+        q.eq("orgId", args.orgId).gte("paidAt", startMs).lt("paidAt", endMs),
+      )
+      .collect();
+    const collected = payments
+      .filter((p) => (p.status ?? "active") === "active")
+      .reduce((s, p) => s + p.amount, 0);
+    return {
+      month: args.month,
+      expected,
+      collected,
+      outstanding,
+      rate: pct(collected, expected),
+      invoiceCount: rows.length,
+    };
+  },
 });
 
 export const collectionSummary = query({
@@ -332,7 +381,7 @@ const paymentRow = v.object({
   allocationSummary: v.optional(v.string()),
 });
 
-const METHODS = ["mpesa_stk", "mpesa_manual", "cash", "bank"] as const;
+const METHODS = ["mpesa_stk", "mpesa_manual", "mpesa_c2b", "cash", "bank"] as const;
 
 export const paymentsBreakdown = query({
   args: {
@@ -443,6 +492,9 @@ export const mpesaHealth = query({
     total: v.number(),
     totalAmount: v.number(),
     successRate: v.number(),
+    channels: v.array(
+      v.object({ channel: v.string(), count: v.number(), amount: v.number() }),
+    ),
   }),
   handler: async (ctx, args) => {
     await assertStaff(ctx, args.orgId);
@@ -454,20 +506,185 @@ export const mpesaHealth = query({
     const totals = new Map<string, { count: number; amount: number }>();
     for (const tx of rows) {
       if (tx._creationTime < args.startMs || tx._creationTime >= args.endMs) continue;
-      const cur = totals.get(tx.status) ?? { count: 0, amount: 0 };
+      const cur = totals.get(`stk:${tx.status}`) ?? { count: 0, amount: 0 };
       cur.count += 1;
       cur.amount += tx.amount;
-      totals.set(tx.status, cur);
+      totals.set(`stk:${tx.status}`, cur);
+    }
+    // C2B (Paybill) channel alongside STK: queued + matched + rejected.
+    const c2b = await ctx.db
+      .query("c2bPayments")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const hit of c2b) {
+      const created = hit._creationTime;
+      if (created < args.startMs || created >= args.endMs) continue;
+      const key = `c2b:${hit.status}`;
+      const cur = totals.get(key) ?? { count: 0, amount: 0 };
+      cur.count += 1;
+      cur.amount += hit.transAmount;
+      totals.set(key, cur);
     }
     const byStatus = [...totals.entries()].map(([status, t]) => ({ status, ...t }));
     const total = byStatus.reduce((s, r) => s + r.count, 0);
-    const success = totals.get("success")?.count ?? 0;
+    const success =
+      (totals.get("stk:success")?.count ?? 0) +
+      (totals.get("c2b:matched")?.count ?? 0);
+    const channels = [
+      {
+        channel: "STK Push",
+        count: [...totals.entries()]
+          .filter(([k]) => k.startsWith("stk:"))
+          .reduce((s, [, t]) => s + t.count, 0),
+        amount: [...totals.entries()]
+          .filter(([k]) => k.startsWith("stk:"))
+          .reduce((s, [, t]) => s + t.amount, 0),
+      },
+      {
+        channel: "Paybill (C2B)",
+        count: [...totals.entries()]
+          .filter(([k]) => k.startsWith("c2b:"))
+          .reduce((s, [, t]) => s + t.count, 0),
+        amount: [...totals.entries()]
+          .filter(([k]) => k.startsWith("c2b:"))
+          .reduce((s, [, t]) => s + t.amount, 0),
+      },
+    ];
     return {
       byStatus,
       total,
       totalAmount: byStatus.reduce((s, r) => s + r.amount, 0),
       successRate: pct(success, total),
+      channels,
     };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Daily close: cash received per day + who recorded it (finance sign-off)
+// ---------------------------------------------------------------------------
+const dailyCloseRow = v.object({
+  day: v.string(),
+  collected: v.number(),
+  count: v.number(),
+  byMethod: v.array(
+    v.object({ method: v.string(), total: v.number(), count: v.number() }),
+  ),
+  byRecorder: v.array(
+    v.object({ recorder: v.string(), total: v.number(), count: v.number() }),
+  ),
+});
+
+function dayKeyFromMs(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+export const dailyClose = query({
+  args: { orgId: v.id("orgs"), startMs: v.number(), endMs: v.number() },
+  returns: v.object({ rows: v.array(dailyCloseRow), total: v.number(), count: v.number() }),
+  handler: async (ctx, args) => {
+    await assertStaff(ctx, args.orgId);
+    if (!(args.startMs < args.endMs)) throw new ConvexError("Invalid date window");
+    if (args.endMs - args.startMs > 62 * 86_400_000) {
+      throw new ConvexError("Keep the close window under 62 days");
+    }
+    const payments = await ctx.db
+      .query("payments")
+      .withIndex("by_org_paidAt", (q) =>
+        q.eq("orgId", args.orgId).gte("paidAt", args.startMs).lt("paidAt", args.endMs),
+      )
+      .collect();
+    const byDay = new Map<
+      string,
+      {
+        collected: number;
+        count: number;
+        methods: Map<string, { total: number; count: number }>;
+        recorders: Map<string, { total: number; count: number }>;
+      }
+    >();
+    for (const p of payments) {
+      if ((p.status ?? "active") !== "active") continue;
+      const day = dayKeyFromMs(p.paidAt);
+      let agg = byDay.get(day);
+      if (agg === undefined) {
+        agg = { collected: 0, count: 0, methods: new Map(), recorders: new Map() };
+        byDay.set(day, agg);
+      }
+      agg.collected += p.amount;
+      agg.count += 1;
+      const m = agg.methods.get(p.method) ?? { total: 0, count: 0 };
+      m.total += p.amount;
+      m.count += 1;
+      agg.methods.set(p.method, m);
+      const who =
+        p.method === "mpesa_stk" || p.method === "mpesa_c2b"
+          ? "M-Pesa auto"
+          : (p.recordedBy ?? "unknown");
+      const r = agg.recorders.get(who) ?? { total: 0, count: 0 };
+      r.total += p.amount;
+      r.count += 1;
+      agg.recorders.set(who, r);
+    }
+    const rows = [...byDay.entries()]
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([day, agg]) => ({
+        day,
+        collected: agg.collected,
+        count: agg.count,
+        byMethod: [...agg.methods.entries()].map(([method, t]) => ({ method, ...t })),
+        byRecorder: [...agg.recorders.entries()].map(([recorder, t]) => ({ recorder, ...t })),
+      }));
+    return {
+      rows: rows as never,
+      total: rows.reduce((s, r) => s + r.collected, 0),
+      count: rows.reduce((s, r) => s + r.count, 0),
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Audit trail: every ledger-touching event, newest first (staff)
+// ---------------------------------------------------------------------------
+const auditRow = v.object({
+  _id: v.id("auditLog"),
+  _creationTime: v.number(),
+  actorUserId: v.optional(v.string()),
+  action: v.string(),
+  entityType: v.string(),
+  entityId: v.optional(v.string()),
+  metadata: v.optional(v.string()),
+});
+
+export const auditTrail = query({
+  args: {
+    orgId: v.id("orgs"),
+    action: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  returns: v.array(auditRow),
+  handler: async (ctx, args) => {
+    const caller = await assertOrgMember(ctx, args.orgId);
+    if (caller.role === "tenant") throw new ConvexError("Staff only");
+    const limit = Math.min(Math.max(args.limit ?? 100, 1), 500);
+    let rows = await ctx.db
+      .query("auditLog")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .order("desc")
+      .take(limit * 2);
+    if (args.action !== undefined) {
+      rows = rows.filter((r) => r.action === args.action);
+    }
+    return rows.slice(0, limit).map((r) => ({
+      _id: r._id,
+      _creationTime: r._creationTime,
+      actorUserId: r.actorUserId,
+      action: r.action,
+      entityType: r.entityType,
+      entityId: r.entityId,
+      metadata: r.metadata,
+    })) as never;
   },
 });
 

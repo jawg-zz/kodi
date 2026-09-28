@@ -8,6 +8,7 @@ import {
 import type { Id } from "./_generated/dataModel";
 import { assertOrgMember, assertStaff, audit } from "./lib/auth";
 import { consumeCreditInTx, addCreditInTx } from "./lib/credit";
+import { ensureAccountCode } from "./c2b";
 
 const tenantStatus = v.union(
   v.literal("active"),
@@ -22,6 +23,7 @@ const tenantShape = v.object({
   full_name: v.string(),
   phone: v.string(),
   national_id: v.string(),
+  accountCode: v.optional(v.string()),
   unitId: v.optional(v.id("units")),
   move_in_date: v.optional(v.string()),
   deposit_held: v.number(),
@@ -297,6 +299,8 @@ export const createTenant = mutation({
       status: "active",
       notes: args.notes?.trim() || undefined,
     });
+    // Stable Paybill account code from day one (also the portal's C2B ref).
+    await ensureAccountCode(ctx, id);
     await syncUnitForTenant(ctx, id);
     await audit(ctx, {
       orgId: args.orgId,

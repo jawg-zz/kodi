@@ -22,6 +22,8 @@ export interface Org {
   subscription_status: SubscriptionStatus;
   subscription_period_end: string | null;
   invoice_due_day: number;
+  /** Reversals at or above this KES need the owner (0 = gate disabled). */
+  reversal_limit: number | null;
   created_at: string;
 }
 
@@ -66,6 +68,8 @@ export interface Tenant {
   full_name: string;
   phone: string;
   national_id: string;
+  /** Stable Paybill account code shown in the portal (may be empty pre-backfill). */
+  account_code?: string | null;
   unit_id: string | null;
   move_in_date: string | null;
   deposit_held: number;
@@ -160,6 +164,47 @@ export interface MpesaTransaction {
   created_at: string;
 }
 
+export type C2bStatus = "pending_review" | "matched" | "rejected";
+
+export interface C2bPayment {
+  id: string;
+  org_id: string;
+  tenant_id: string | null;
+  tenant_name: string | null;
+  trans_id: string;
+  amount: number;
+  bill_ref: string | null;
+  msisdn: string;
+  sender_name: string | null;
+  trans_time: string | null;
+  status: C2bStatus;
+  match_reason: string | null;
+  payment_id: string | null;
+  created_at: string;
+}
+
+export interface C2bSuggestion {
+  tenant_id: string;
+  tenant_name: string;
+  phone: string;
+  account_code: string | null;
+  score: number;
+  signals: string[];
+}
+
+export interface PaybillInfo {
+  shortcode: string;
+  account_code: string;
+  registered: boolean;
+}
+
+export interface C2bStatusView {
+  configured: boolean;
+  shortcode: string;
+  registered: boolean;
+  registered_at: string | null;
+}
+
 export interface DepositSettlement {
   id: string;
   org_id: string;
@@ -246,6 +291,59 @@ export interface MpesaHealth {
   total: number;
   total_amount: number;
   success_rate: number;
+  channels: { channel: string; count: number; amount: number }[];
+}
+
+export interface DailyCloseRow {
+  day: string;
+  collected: number;
+  count: number;
+  by_method: { method: string; total: number; count: number }[];
+  by_recorder: { recorder: string; total: number; count: number }[];
+}
+
+export interface DailyClose {
+  rows: DailyCloseRow[];
+  total: number;
+  count: number;
+}
+
+export interface AuditEvent {
+  id: string;
+  created_at: string;
+  actor: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  metadata: string | null;
+}
+
+export interface PaymentAlert {
+  id: string;
+  created_at: string;
+  kind: string;
+  title: string;
+  detail: string | null;
+  trans_id: string | null;
+  acknowledged: boolean;
+}
+
+export interface WebhookHit {
+  id: string;
+  created_at: string;
+  route: string;
+  trans_id: string | null;
+  shortcode: string | null;
+  outcome: string;
+  detail: string | null;
+  latency_ms: number | null;
+}
+
+export interface C2bRiskReview {
+  risk: "low" | "medium" | "high";
+  checks: string[];
+  prior_from_sender: number;
+  avg_amount: number;
 }
 
 export interface RentRollRow {

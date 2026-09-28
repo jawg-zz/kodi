@@ -137,7 +137,7 @@ export async function recordPaymentCore(
     orgId: Id<"orgs">;
     tenantId: Id<"tenants">;
     amount: number;
-    method: "mpesa_stk" | "mpesa_manual" | "cash" | "bank";
+    method: "mpesa_stk" | "mpesa_manual" | "mpesa_c2b" | "cash" | "bank";
     mpesaCode?: string;
     paidAt?: number;
     note?: string;
@@ -183,9 +183,9 @@ export async function recordPaymentCore(
     }
   }
 
-  // M-Pesa money (STK receipt or hand-typed code) dedupes across BOTH entry
-  // paths: a receipt already recorded by STK cannot be re-recorded manually
-  // and vice versa.
+  // M-Pesa money (STK receipt, C2B TransID, or hand-typed code) dedupes
+  // across ALL entry paths: a TransID already recorded by C2B cannot be
+  // re-recorded manually or by STK, and vice versa.
   if (args.mpesaCode) {
     const dup = await ctx.db
       .query("payments")
@@ -196,7 +196,9 @@ export async function recordPaymentCore(
     if (
       dup !== null &&
       (dup.status ?? "active") === "active" &&
-      (dup.method === "mpesa_manual" || dup.method === "mpesa_stk")
+      (dup.method === "mpesa_manual" ||
+        dup.method === "mpesa_stk" ||
+        dup.method === "mpesa_c2b")
     ) {
       throw new ConvexError("This M-Pesa code was already recorded.");
     }

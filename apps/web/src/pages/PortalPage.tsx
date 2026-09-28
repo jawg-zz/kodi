@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../lib/auth";
 import {
+  ensureMyAccountCode,
+  getPaybillInfo,
   getTenantCredit,
   listTenantInvoices,
   listTenantPayments,
 } from "../lib/api";
 import { stkInitiate, stkStatus } from "../lib/api";
-import type { InvoiceWithRefs, MpesaTransaction, PaymentWithRefs } from "../lib/types";
+import type { InvoiceWithRefs, MpesaTransaction, PaybillInfo, PaymentWithRefs } from "../lib/types";
 import { Button } from "../components/Button";
 import { Field, Input } from "../components/Field";
 import { Badge, Card, CardBody, ErrorBanner, Loading, Stat } from "../components/ui";
@@ -100,11 +102,12 @@ export function PortalPage() {
               <div>
                 <h2 className="font-semibold">Pay your rent</h2>
                 <p className="text-sm text-slate-500">
-                  Pay via M-Pesa to your own number — you'll get an STK prompt to enter your PIN.
+                  Two ways: get an STK prompt on your phone, or pay from the M-Pesa menu yourself.
                 </p>
               </div>
               <Button onClick={() => setShowPay(true)}>Pay via M-Pesa</Button>
             </div>
+            <PaybillCard tenantId={tenant.id} balance={netOwed} />
             {tx && tx.status === "pending" && (
               <div className="mt-3 rounded-lg bg-blue-50 p-3 text-sm text-blue-800">
                 A prompt for {formatKES(tx.amount)} was sent to your phone. Enter your M-Pesa PIN to complete it — this page updates automatically.
@@ -260,4 +263,104 @@ function SelfPayModal({ tenantId, phone, balance, onClose, onStarted }: {
 
 export function TenantBadgeCheck() {
   return <Badge tone="slate">tenant</Badge>;
+}
+
+/**
+ * Paybill self-serve card: shows the tenant exactly what to type in the
+ * M-Pesa menu (business number + their account code). Confirmation
+ * auto-records — no STK prompt needed, works on any phone.
+ */
+function PaybillCard({ tenantId, balance }: { tenantId: string; balance: number }) {
+  const [info, setInfo] = useState<PaybillInfo | null | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checkMsg, setCheckMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    getPaybillInfo(tenantId).then(setInfo).catch(() => setInfo(null));
+  }, [tenantId]);
+
+  if (info === undefined) return null;
+  if (info === null) return null;
+
+  const ensureCode = async () => {
+    setBusy(true);
+    try {
+      const code = await ensureMyAccountCode();
+      setInfo({ ...info, account_code: code });
+    } catch {
+      // keep existing state; staff can share the code instead
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // "I have paid" check: reload this tenant's recent payments and see if
+  // anything landed in the last 15 minutes (C2B confirms in seconds, but
+  // allow for Daraja delays). Refreshes the page data on a hit.
+  const checkPaid = async () => {
+    setChecking(true);
+    setCheckMsg(null);
+    try {
+      const pay = await listTenantPayments(tenantId);
+      const recent = pay.filter(
+        (p) =>
+          (p.status ?? "active") === "active" &&
+          Date.now() - new Date(p.paid_at).getTime() < 15 * 60_000,
+      );
+      if (recent.length > 0) {
+        const total = recent.reduce((s, p) => s + p.amount, 0);
+        setCheckMsg(`Found it — ${formatKES(total)} recorded${recent.length > 1 ? ` across ${recent.length} payments` : ""}. Refreshing…`);
+        setTimeout(() => window.location.reload(), 1500);
+      } else {
+        setCheckMsg(
+          "Nothing yet — confirmations usually arrive within a minute. Check your M-Pesa SMS for the transaction code, and make sure the account number matches the one above.",
+        );
+      }
+    } catch {
+      setCheckMsg("Could not check right now — try refreshing the page.");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+      <p className="font-semibold text-slate-800">Or pay from your M-Pesa menu</p>
+      {info.registered ? (
+        <>
+          <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-slate-600">
+            <li>M-Pesa → Lipa na M-Pesa → Paybill</li>
+            <li>Business no: <strong className="text-slate-900">{info.shortcode}</strong></li>
+            <li>
+              Account no:{" "}
+              {info.account_code ? (
+                <strong className="text-slate-900">{info.account_code}</strong>
+              ) : (
+                <button onClick={ensureCode} disabled={busy} className="font-medium text-brand-600 hover:underline">
+                  {busy ? "…" : "show my account code"}
+                </button>
+              )}
+            </li>
+            <li>
+              Amount: <strong className="text-slate-900">{formatKES(balance)}</strong> (or what you can) + your PIN — it records automatically.
+            </li>
+          </ol>
+          <p className="mt-1 text-xs text-slate-500">
+            Use your account code so the payment lands on your rent straight away.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={checkPaid} disabled={checking}>
+              {checking ? "Checking…" : "I have paid — check now"}
+            </Button>
+            {checkMsg && <p className="text-xs text-slate-600">{checkMsg}</p>}
+          </div>
+        </>
+      ) : (
+        <p className="mt-1 text-slate-500">
+          Paybill self-serve is being set up — use the STK prompt above for now.
+        </p>
+      )}
+    </div>
+  );
 }

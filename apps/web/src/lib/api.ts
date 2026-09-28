@@ -3,8 +3,14 @@ import { api } from "../../../../convex/_generated/api";
 import type {
   AllocationPreview,
   ArrearsAging,
+  AuditEvent,
+  C2bPayment,
+  C2bRiskReview,
+  C2bStatusView,
+  C2bSuggestion,
   CollectionMonth,
   CreditLedgerEntry,
+  DailyClose,
   DepositSettlement,
   DepositsAndCredits,
   Invoice,
@@ -12,6 +18,8 @@ import type {
   MpesaHealth,
   MpesaTransaction,
   Org,
+  PaybillInfo,
+  PaymentAlert,
   PaymentRecordResult,
   PaymentsBreakdown,
   PaymentWithRefs,
@@ -21,6 +29,7 @@ import type {
   TenantUserLink,
   Unit,
   UnitWithTenant,
+  WebhookHit,
 } from "./types";
 
 function err(e: unknown): never {
@@ -40,6 +49,7 @@ function toOrg(r: any): Org {
     subscription_status: r.subscription_status,
     subscription_period_end: r.subscription_period_end ?? null,
     invoice_due_day: r.invoice_due_day,
+    reversal_limit: r.reversal_limit ?? null,
     created_at: iso(r._creationTime),
   };
 }
@@ -63,6 +73,7 @@ function emptyTenant(id: string, orgId: string): Tenant {
     full_name: "",
     phone: "",
     national_id: "",
+    account_code: null,
     unit_id: null,
     move_in_date: null,
     deposit_held: 0,
@@ -78,6 +89,7 @@ function toTenant(r: any): Tenant {
     full_name: r.full_name,
     phone: r.phone,
     national_id: r.national_id ?? "",
+    account_code: r.accountCode ?? null,
     unit_id: r.unitId ?? null,
     move_in_date: r.move_in_date ?? null,
     deposit_held: r.deposit_held ?? 0,
@@ -835,6 +847,157 @@ export async function listMpesaTransactions(
 }
 
 // ---------------------------------------------------------------------------
+// M-Pesa C2B (Paybill): tenants pay from the M-Pesa menu, Kodi auto-records
+// ---------------------------------------------------------------------------
+function toC2b(r: any): C2bPayment {
+  return {
+    id: r._id,
+    org_id: r.orgId,
+    tenant_id: r.tenantId ?? null,
+    tenant_name: r.tenantName ?? null,
+    trans_id: r.transId,
+    amount: r.transAmount,
+    bill_ref: r.billRef ?? null,
+    msisdn: r.msisdn,
+    sender_name: r.senderName ?? null,
+    trans_time: r.transTime ?? null,
+    status: r.status,
+    match_reason: r.matchReason ?? null,
+    payment_id: r.paymentId ?? null,
+    created_at: iso(r._creationTime),
+  };
+}
+
+export async function listC2bPayments(
+  orgId: string,
+  status?: "pending_review" | "matched" | "rejected",
+): Promise<C2bPayment[]> {
+  try {
+    const rows = (await convex.query((api as any).c2b.listC2bPayments, {
+      orgId,
+      status,
+    })) as any[];
+    return rows.map(toC2b);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function matchC2bPayment(
+  id: string,
+  tenantId: string,
+): Promise<string> {
+  try {
+    return (await convex.mutation((api as any).c2b.matchC2bPayment, {
+      id,
+      tenantId,
+    })) as string;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function rejectC2bPayment(
+  id: string,
+  reason: string,
+): Promise<void> {
+  try {
+    await convex.mutation((api as any).c2b.rejectC2bPayment, { id, reason });
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Ranked tenant suggestions for a queued Paybill hit. */
+export async function suggestC2bTenant(id: string): Promise<C2bSuggestion[]> {
+  try {
+    const rows = (await convex.query((api as any).c2b.suggestC2bTenant, {
+      id,
+    })) as any[];
+    return rows.map((r: any) => ({
+      tenant_id: r.tenantId,
+      tenant_name: r.tenantName,
+      phone: r.phone,
+      account_code: r.accountCode ?? null,
+      score: r.score,
+      signals: r.signals ?? [],
+    }));
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Match every queued hit with an unambiguous sender phone. */
+export async function bulkMatchC2bByPhone(
+  orgId: string,
+): Promise<{ matched: number; skipped: number }> {
+  try {
+    return (await convex.mutation((api as any).c2b.bulkMatchC2bByPhone, {
+      orgId,
+    })) as { matched: number; skipped: number };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** What the tenant types into the M-Pesa Paybill menu. */
+export async function getPaybillInfo(
+  tenantId: string,
+): Promise<PaybillInfo | null> {
+  try {
+    const row = (await convex.query((api as any).c2b.getPaybillInfo, {
+      tenantId,
+    })) as any;
+    if (!row) return null;
+    return {
+      shortcode: row.shortcode,
+      account_code: row.accountCode,
+      registered: row.registered,
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Mint the tenant's Paybill account code if they don't have one yet. */
+export async function ensureMyAccountCode(): Promise<string> {
+  try {
+    return (await convex.mutation(
+      (api as any).c2b.ensureMyAccountCode,
+      {},
+    )) as string;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getC2bStatus(): Promise<C2bStatusView> {
+  try {
+    const row = (await convex.query((api as any).c2b.getC2bStatus, {})) as any;
+    return {
+      configured: row.configured,
+      shortcode: row.shortcode,
+      registered: row.registered,
+      registered_at: row.registeredAt ? iso(row.registeredAt) : null,
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function registerC2bUrls(): Promise<boolean> {
+  try {
+    const row = (await convex.action(
+      (api as any).c2b.registerC2bUrls,
+      {},
+    )) as any;
+    return row.registered;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Org / settings
 // ---------------------------------------------------------------------------
 export async function updateOrg(
@@ -847,6 +1010,7 @@ export async function updateOrg(
       name: values.name,
       invoice_due_day: (values as any).invoice_due_day,
       plan_code: (values as any).plan_code,
+      reversal_limit: (values as any).reversal_limit,
       subscription_status: values.subscription_status,
     });
   } catch (e) {
@@ -1052,6 +1216,79 @@ function toMpesaHealth(r: any): MpesaHealth {
     total: r.total,
     total_amount: r.totalAmount,
     success_rate: r.successRate,
+    channels: (r.channels ?? []).map((x: any) => ({
+      channel: x.channel,
+      count: x.count,
+      amount: x.amount,
+    })),
+  };
+}
+
+function toDailyClose(r: any): DailyClose {
+  return {
+    rows: (r.rows ?? []).map((x: any) => ({
+      day: x.day,
+      collected: x.collected,
+      count: x.count,
+      by_method: (x.byMethod ?? []).map((m: any) => ({
+        method: m.method,
+        total: m.total,
+        count: m.count,
+      })),
+      by_recorder: (x.byRecorder ?? []).map((m: any) => ({
+        recorder: m.recorder,
+        total: m.total,
+        count: m.count,
+      })),
+    })),
+    total: r.total,
+    count: r.count,
+  };
+}
+
+function toAuditEvent(r: any): AuditEvent {
+  return {
+    id: r._id,
+    created_at: iso(r._creationTime),
+    actor: r.actorUserId ?? null,
+    action: r.action,
+    entity_type: r.entityType,
+    entity_id: r.entityId ?? null,
+    metadata: r.metadata ?? null,
+  };
+}
+
+function toAlert(r: any): PaymentAlert {
+  return {
+    id: r._id,
+    created_at: iso(r._creationTime),
+    kind: r.kind,
+    title: r.title,
+    detail: r.detail ?? null,
+    trans_id: r.transId ?? null,
+    acknowledged: r.acknowledged,
+  };
+}
+
+function toWebhookHit(r: any): WebhookHit {
+  return {
+    id: r._id,
+    created_at: iso(r._creationTime),
+    route: r.route,
+    trans_id: r.transId ?? null,
+    shortcode: r.shortcode ?? null,
+    outcome: r.outcome,
+    detail: r.detail ?? null,
+    latency_ms: r.latencyMs ?? null,
+  };
+}
+
+function toRiskReview(r: any): C2bRiskReview {
+  return {
+    risk: r.risk,
+    checks: r.checks ?? [],
+    prior_from_sender: r.priorFromSender ?? 0,
+    avg_amount: r.avgAmount ?? 0,
   };
 }
 
@@ -1197,6 +1434,141 @@ export async function getDepositsAndCredits(args: {
       reportsArgs(args.orgId, { propertyId: args.propertyId }),
     )) as any;
     return toDepositsAndCredits(row);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Single-month cash snapshot: same cash definition as Reports. */
+export async function getMonthCashSnapshot(
+  orgId: string,
+  month: string,
+): Promise<{ collected: number; expected: number; outstanding: number }> {
+  try {
+    const row = (await convex.query(
+      (api as any).reports.monthCashSnapshot,
+      { orgId, month },
+    )) as any;
+    return {
+      collected: row.collected,
+      expected: row.expected,
+      outstanding: row.outstanding,
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getDailyClose(args: {
+  orgId: string;
+  startMs: number;
+  endMs: number;
+}): Promise<DailyClose> {
+  try {
+    const row = (await convex.query((api as any).reports.dailyClose, {
+      orgId: args.orgId,
+      startMs: args.startMs,
+      endMs: args.endMs,
+    })) as any;
+    return toDailyClose(row);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getAuditTrail(
+  orgId: string,
+  action?: string,
+): Promise<AuditEvent[]> {
+  try {
+    const rows = (await convex.query((api as any).reports.auditTrail, {
+      orgId,
+      action,
+    })) as any[];
+    return rows.map(toAuditEvent);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function listAlerts(orgId: string): Promise<PaymentAlert[]> {
+  try {
+    const rows = (await convex.query((api as any).c2b.listAlerts, {
+      orgId,
+    })) as any[];
+    return rows.map(toAlert);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function acknowledgeAlert(id: string): Promise<void> {
+  try {
+    await convex.mutation((api as any).c2b.acknowledgeAlert, { id });
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function listWebhookLog(orgId: string): Promise<WebhookHit[]> {
+  try {
+    const rows = (await convex.query((api as any).c2b.listWebhookLog, {
+      orgId,
+    })) as any[];
+    return rows.map(toWebhookHit);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function verifyC2bTransaction(id: string): Promise<C2bRiskReview> {
+  try {
+    const row = (await convex.query((api as any).c2b.verifyC2bTransaction, {
+      id,
+    })) as any;
+    return toRiskReview(row);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export interface C2bSimulation {
+  match: { tenant_name: string; reason: string } | null;
+  preview: { month: string; balance: number; applied: number }[];
+  leftover: number;
+  suggestions: { tenant_name: string; score: number; signals: string[] }[];
+}
+
+/** Dry-run a Paybill confirmation: matching + split, nothing written. */
+export async function simulateC2b(args: {
+  orgId: string;
+  billRef?: string;
+  msisdn: string;
+  amount: number;
+}): Promise<C2bSimulation> {
+  try {
+    const row = (await convex.query((api as any).c2b.simulateC2b, {
+      orgId: args.orgId,
+      billRef: args.billRef,
+      msisdn: args.msisdn,
+      amount: args.amount,
+    })) as any;
+    return {
+      match: row.match
+        ? { tenant_name: row.match.tenantName, reason: row.match.reason }
+        : null,
+      preview: (row.preview ?? []).map((p: any) => ({
+        month: p.month,
+        balance: p.balance,
+        applied: p.applied,
+      })),
+      leftover: row.leftover ?? 0,
+      suggestions: (row.suggestions ?? []).map((s: any) => ({
+        tenant_name: s.tenantName,
+        score: s.score,
+        signals: s.signals ?? [],
+      })),
+    };
   } catch (e) {
     return err(e);
   }

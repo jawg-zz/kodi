@@ -164,8 +164,15 @@ export function MpesaCollectModal({ tenantId, tenantName, defaultPhone, defaultA
               <p className="mb-1 font-semibold">Recent attempts</p>
               <ul className="space-y-1">
                 {attempts.slice(0, 5).map((a) => (
-                  <li key={a.id} className="flex justify-between">
-                    <span>{formatKES(a.amount)} · {STATUS_LABEL[a.status] ?? a.status}</span>
+                  <li key={a.id} className="flex justify-between gap-2">
+                    <span>
+                      {formatKES(a.amount)} · {STATUS_LABEL[a.status] ?? a.status}
+                      {a.status === "success" && /late success/i.test(a.result_desc ?? "") && (
+                        <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800" title="The money arrived after the prompt had already expired — it still recorded correctly.">
+                          late
+                        </span>
+                      )}
+                    </span>
                     <span>{new Date(a.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
                   </li>
                 ))}

@@ -34,6 +34,11 @@ export default defineSchema({
     ),
     subscription_period_end: v.optional(v.string()),
     invoice_due_day: v.number(),
+    /**
+     * Reversals (void/refund) at or above this KES amount need the owner;
+     * below it any staff may reverse. Default 50,000; 0 disables the gate.
+     */
+    reversal_limit: v.optional(v.number()),
   }),
 
   orgMembers: defineTable({
@@ -97,6 +102,12 @@ export default defineSchema({
     full_name: v.string(),
     phone: v.string(),
     national_id: v.string(),
+    /**
+     * Stable Paybill account code (e.g. "KDI-7Q2X"). Shown in the portal;
+     * tenants type it as the M-Pesa account number so C2B hits match
+     * exactly. Assigned at creation; backfilled lazily for older rows.
+     */
+    accountCode: v.optional(v.string()),
     unitId: v.optional(v.id("units")),
     move_in_date: v.optional(v.string()),
     deposit_held: v.number(),
@@ -110,7 +121,8 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_phone", ["orgId", "phone"])
-    .index("by_unit", ["unitId"]),
+    .index("by_unit", ["unitId"])
+    .index("by_account", ["accountCode"]),
 
   tenantUsers: defineTable({
     tenantId: v.id("tenants"),
@@ -159,6 +171,7 @@ export default defineSchema({
     method: v.union(
       v.literal("mpesa_stk"),
       v.literal("mpesa_manual"),
+      v.literal("mpesa_c2b"),
       v.literal("cash"),
       v.literal("bank"),
     ),
@@ -259,7 +272,42 @@ export default defineSchema({
     consumerSecretEnc: v.string(),
     shortcode: v.string(),
     passkeyEnc: v.string(),
+    /**
+     * C2B (Paybill) wiring. registerUrls must succeed before Safaricom
+     * delivers validation/confirmation hits to /mpesa-c2b-*.
+     */
+    c2bRegistered: v.optional(v.boolean()),
+    c2bRegisteredAt: v.optional(v.number()),
   }).index("by_org", ["orgId"]),
+
+  /**
+   * Raw C2B (Paybill) hits from Safaricom, one row per TransID. Matched rows
+   * link a payment; unmatched rows stay `pending_review` so money is never
+   * silently lost when the tenant types the wrong account number.
+   */
+  c2bPayments: defineTable({
+    orgId: v.id("orgs"),
+    tenantId: v.optional(v.id("tenants")),
+    transId: v.string(),
+    transAmount: v.number(),
+    billRef: v.optional(v.string()),
+    msisdn: v.string(),
+    firstName: v.optional(v.string()),
+    middleName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
+    transTime: v.optional(v.string()),
+    status: v.union(
+      v.literal("pending_review"),
+      v.literal("matched"),
+      v.literal("rejected"),
+    ),
+    matchReason: v.optional(v.string()),
+    paymentId: v.optional(v.id("payments")),
+    rawPayload: v.optional(v.string()),
+  })
+    .index("by_trans", ["transId"])
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),
 
   depositSettlements: defineTable({
     orgId: v.id("orgs"),
@@ -292,6 +340,41 @@ export default defineSchema({
     entityId: v.optional(v.string()),
     metadata: v.optional(v.string()),
   }).index("by_org", ["orgId"]),
+
+  /**
+   * Inbound Daraja webhook hits (STK callback + C2B validation/confirmation
+   * + reversals). Append-only debug trail: what arrived, what we did with
+   * it, and how long it took. Bounded — prune jobs keep the last N days.
+   */
+  webhookLog: defineTable({
+    orgId: v.optional(v.id("orgs")),
+    route: v.string(),
+    transId: v.optional(v.string()),
+    shortcode: v.optional(v.string()),
+    outcome: v.string(),
+    detail: v.optional(v.string()),
+    latencyMs: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_route", ["route"]),
+
+  /**
+   * Payment anomaly alerts for staff: unusual spikes, unknown senders,
+   * verification failures. Acknowledged from the Payments page; never
+   * auto-deleted so the trail survives.
+   */
+  paymentAlerts: defineTable({
+    orgId: v.id("orgs"),
+    kind: v.string(),
+    title: v.string(),
+    detail: v.optional(v.string()),
+    transId: v.optional(v.string()),
+    acknowledged: v.boolean(),
+    acknowledgedBy: v.optional(v.string()),
+    acknowledgedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_open", ["orgId", "acknowledged"]),
 
   /** Invite-link flow (replaces Supabase admin-create-user + temp passwords). */
   invites: defineTable({

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { currentMonthKey, formatKES, monthLabel } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
-import { generateInvoices, listInvoices, listPayments, listTenants, listUnits } from "../lib/api";
+import { generateInvoices, getMonthCashSnapshot, listInvoices, listPayments, listTenants, listUnits } from "../lib/api";
 import { Button } from "../components/Button";
 import { Badge, Card, CardBody, EmptyState, ErrorBanner, Loading, PageHeader, Stat } from "../components/ui";
 import { InvoiceStatusBadge, Money, UnitStatusBadge } from "../components/domain";
@@ -16,6 +16,7 @@ export function DashboardPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [invoices, setInvoices] = useState<InvoiceWithRefs[]>([]);
   const [payments, setPayments] = useState<PaymentWithRefs[]>([]);
+  const [cash, setCash] = useState<{ collected: number; expected: number; outstanding: number } | null>(null);
 
   const month = currentMonthKey();
 
@@ -24,16 +25,18 @@ export function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const [u, t, inv, pay] = await Promise.all([
+      const [u, t, inv, pay, snapshot] = await Promise.all([
         listUnits(org.id),
         listTenants(org.id),
         listInvoices(org.id, month),
         listPayments(org.id),
+        getMonthCashSnapshot(org.id, month).catch(() => null),
       ]);
       setUnits(u);
       setTenants(t);
       setInvoices(inv);
       setPayments(pay.slice(0, 8));
+      setCash(snapshot);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -59,9 +62,11 @@ export function DashboardPage() {
   if (loading) return <Loading label="Loading dashboard…" />;
   if (error) return <ErrorBanner message={error} onRetry={load} />;
 
-  const expected = invoices.reduce((s, i) => s + i.total, 0);
-  const outstanding = invoices.reduce((s, i) => s + i.balance, 0);
-  const collected = expected - outstanding;
+  const expected = cash?.expected ?? invoices.reduce((s, i) => s + i.total, 0);
+  const outstanding = cash?.outstanding ?? invoices.reduce((s, i) => s + i.balance, 0);
+  // Same cash definition as Reports: actual money received in the month
+  // (paidAt window, active rows), never expected-minus-outstanding.
+  const collected = cash?.collected ?? (expected - outstanding);
   const occupied = units.filter((u) => u.status !== "vacant").length;
   const occupancy = units.length ? Math.round((occupied / units.length) * 100) : 0;
   const vacancies = units.filter((u) => u.status === "vacant");

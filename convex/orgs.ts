@@ -14,6 +14,7 @@ const orgShape = v.object({
   ),
   subscription_period_end: v.optional(v.string()),
   invoice_due_day: v.number(),
+  reversal_limit: v.optional(v.number()),
 });
 
 const PLANS = ["starter", "growth", "pro"] as const;
@@ -163,6 +164,7 @@ export const updateOrg = mutation({
     name: v.optional(v.string()),
     invoice_due_day: v.optional(v.number()),
     plan_code: v.optional(v.string()),
+    reversal_limit: v.optional(v.number()),
     subscription_status: v.optional(
       v.union(
         v.literal("trialing"),
@@ -195,6 +197,17 @@ export const updateOrg = mutation({
     }
     if (args.subscription_status !== undefined) {
       patch.subscription_status = args.subscription_status;
+    }
+    if (args.reversal_limit !== undefined) {
+      // Owner-only: the limit gates who may reverse big money.
+      if (caller.role !== "owner") {
+        throw new ConvexError("Only the business owner can change this.");
+      }
+      const limit = Math.round(args.reversal_limit);
+      if (!Number.isFinite(limit) || limit < 0 || limit > 10_000_000) {
+        throw new ConvexError("Reversal limit must be 0–10,000,000 KES (0 disables the gate).");
+      }
+      patch.reversal_limit = limit;
     }
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.orgId, patch as never);

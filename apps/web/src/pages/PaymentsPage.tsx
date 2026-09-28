@@ -3,15 +3,24 @@ import { Link, useParams } from "react-router-dom";
 import { formatDateTime, monthLabel } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import {
+  acknowledgeAlert,
+  bulkMatchC2bByPhone,
   getCreditLedger,
   getPayment,
+  listAlerts,
+  listC2bPayments,
   listMpesaTransactions,
   listPayments,
   listTenants,
+  listWebhookLog,
+  matchC2bPayment,
   refundPayment,
+  rejectC2bPayment,
+  suggestC2bTenant,
+  verifyC2bTransaction,
   voidPayment,
 } from "../lib/api";
-import type { PaymentStatus, PaymentWithRefs, Tenant } from "../lib/types";
+import type { C2bPayment, C2bSuggestion, PaymentAlert, PaymentStatus, PaymentWithRefs, Tenant, WebhookHit } from "../lib/types";
 import { Button } from "../components/Button";
 import { Field, Input, Select } from "../components/Field";
 import { Badge, Card, EmptyState, ErrorBanner, Loading, PageHeader } from "../components/ui";
@@ -36,6 +45,10 @@ export function PaymentsPage() {
   const [payments, setPayments] = useState<PaymentWithRefs[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [pendingTx, setPendingTx] = useState<MpesaTransaction[]>([]);
+  const [c2bQueue, setC2bQueue] = useState<C2bPayment[]>([]);
+  const [alerts, setAlerts] = useState<PaymentAlert[]>([]);
+  const [webhooks, setWebhooks] = useState<WebhookHit[]>([]);
+  const [showWebhooks, setShowWebhooks] = useState(false);
   const [method, setMethod] = useState("all");
   const [status, setStatus] = useState("all");
   const [tenantId, setTenantId] = useState("all");
@@ -51,14 +64,18 @@ export function PaymentsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [p, t, txs] = await Promise.all([
+      const [p, t, txs, c2b, al] = await Promise.all([
         listPayments(org.id),
         listTenants(org.id),
         listMpesaTransactions(org.id).catch(() => []),
+        listC2bPayments(org.id, "pending_review").catch(() => []),
+        listAlerts(org.id).catch(() => []),
       ]);
       setPayments(p);
       setTenants(t);
       setPendingTx(txs.filter((x) => x.status === "pending"));
+      setC2bQueue(c2b);
+      setAlerts(al);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -118,8 +135,47 @@ export function PaymentsPage() {
       <PageHeader
         title="Payments"
         sub={`${shown.length} payments · ${new Intl.NumberFormat("en-US").format(activeTotal)} KES active`}
-        actions={<Button onClick={() => setShowModal(true)}>Record payment</Button>}
+        actions={
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              onClick={async () => {
+                if (!org) return;
+                if (showWebhooks) {
+                  setShowWebhooks(false);
+                  return;
+                }
+                try {
+                  setWebhooks(await listWebhookLog(org.id));
+                } catch {
+                  setWebhooks([]);
+                }
+                setShowWebhooks(true);
+              }}
+            >
+              Webhook log
+            </Button>
+            <Button onClick={() => setShowModal(true)}>Record payment</Button>
+          </div>
+        }
       />
+
+      {alerts.length > 0 && (
+        <AlertsCard alerts={alerts} onChanged={load} />
+      )}
+
+      {showWebhooks && (
+        <WebhookCard hits={webhooks} onClose={() => setShowWebhooks(false)} />
+      )}
+
+      {c2bQueue.length > 0 && org && (
+        <C2bReviewCard
+          queue={c2bQueue}
+          tenants={tenants}
+          orgId={org.id}
+          onChanged={load}
+        />
+      )}
 
       {pendingTx.length > 0 && (
         <Card className="mb-4 border-amber-200 bg-amber-50/60">
@@ -151,6 +207,7 @@ export function PaymentsPage() {
               <option value="all">All methods</option>
               <option value="mpesa_stk">M-Pesa (STK)</option>
               <option value="mpesa_manual">M-Pesa (manual)</option>
+              <option value="mpesa_c2b">M-Pesa (Paybill)</option>
               <option value="cash">Cash</option>
               <option value="bank">Bank</option>
             </Select>
@@ -485,4 +542,328 @@ export function ReceiptPage() {
 
 export function PendingTxBadge({ status }: { status: string }) {
   return <Badge tone={status === "pending" ? "amber" : status === "success" ? "green" : "red"}>{TX_LABEL[status] ?? status}</Badge>;
+}
+
+/** Anomaly alerts: new senders, bursts, outliers. Acknowledge to clear. */
+function AlertsCard({ alerts, onChanged }: {
+  alerts: PaymentAlert[];
+  onChanged: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const ack = async (id: string) => {
+    setBusy(id);
+    try {
+      await acknowledgeAlert(id);
+      await onChanged();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Card className="mb-4 border-red-200 bg-red-50/50">
+      <div className="p-4">
+        <p className="text-sm font-semibold text-red-900">
+          {alerts.length} payment alert{alerts.length === 1 ? "" : "s"}
+        </p>
+        <ul className="mt-2 space-y-2">
+          {alerts.slice(0, 5).map((a) => (
+            <li key={a.id} className="flex flex-wrap items-start justify-between gap-2 text-sm">
+              <div>
+                <p className="font-medium text-red-950">{a.title}</p>
+                {a.detail && <p className="text-xs text-red-700">{a.detail}</p>}
+              </div>
+              <Button size="sm" variant="secondary" onClick={() => ack(a.id)} disabled={busy === a.id}>
+                {busy === a.id ? "…" : "Acknowledge"}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Card>
+  );
+}
+
+/** Daraja webhook debug trail: route, outcome, latency per hit. */
+function WebhookCard({ hits, onClose }: {
+  hits: WebhookHit[];
+  onClose: () => void;
+}) {
+  return (
+    <Card className="mb-4">
+      <div className="p-4">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold">Webhook log ({hits.length})</p>
+          <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
+        </div>
+        {hits.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">No webhook hits yet — they appear here as Daraja calls in.</p>
+        ) : (
+          <div className="mt-2 max-h-64 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-slate-200 text-left uppercase text-slate-500">
+                  <th className="py-1 pr-2">When</th>
+                  <th className="py-1 pr-2">Route</th>
+                  <th className="py-1 pr-2">TransID</th>
+                  <th className="py-1 pr-2">Outcome</th>
+                  <th className="py-1 text-right">ms</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {hits.slice(0, 50).map((h) => (
+                  <tr key={h.id}>
+                    <td className="py-1 pr-2 text-slate-500">
+                      {new Date(h.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                    </td>
+                    <td className="py-1 pr-2">{h.route}</td>
+                    <td className="py-1 pr-2 font-mono">{h.trans_id ?? "—"}</td>
+                    <td className="py-1 pr-2">
+                      <Badge tone={/matched|success|duplicate/.test(h.outcome) ? "green" : /pending|late/.test(h.outcome) ? "amber" : /error|fail|unknown/.test(h.outcome) ? "red" : "slate"}>
+                        {h.outcome}
+                      </Badge>
+                    </td>
+                    <td className="py-1 text-right text-slate-500">{h.latency_ms ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * Paybill hits that arrived with an unrecognised account number. Real
+ * money is sitting in M-Pesa — staff attach each row to the right tenant
+ * (records through the ledger) or reject it with a reason.
+ */
+function C2bReviewCard({ queue, tenants, orgId, onChanged }: {
+  queue: C2bPayment[];
+  tenants: Tenant[];
+  orgId: string;
+  onChanged: () => Promise<void>;
+}) {
+  const [matchFor, setMatchFor] = useState<string | null>(null);
+  const [tenantPick, setTenantPick] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMsg, setBulkMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const close = () => {
+    setMatchFor(null);
+    setTenantPick("");
+    setReason("");
+    setError(null);
+  };
+
+  const doMatch = async () => {
+    if (!matchFor || !tenantPick) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await matchC2bPayment(matchFor, tenantPick);
+      close();
+      await onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doReject = async () => {
+    if (!matchFor || !reason.trim()) {
+      setError("Give a reason — it goes into the audit trail.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await rejectC2bPayment(matchFor, reason.trim());
+      close();
+      await onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const active = queue.find((r) => r.id === matchFor) ?? null;
+
+  const doBulk = async () => {
+    setBulkBusy(true);
+    setBulkMsg(null);
+    try {
+      const res = await bulkMatchC2bByPhone(orgId);
+      setBulkMsg(
+        res.matched > 0
+          ? `${res.matched} payment${res.matched === 1 ? "" : "s"} matched by sender phone${res.skipped > 0 ? `, ${res.skipped} still need review` : ""}.`
+          : "No unambiguous sender-phone matches — review the rows below.",
+      );
+      await onChanged();
+    } catch (e) {
+      setBulkMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Card className="mb-4 border-purple-200 bg-purple-50/50">
+        <div className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-purple-900">
+              {queue.length} Paybill payment{queue.length === 1 ? "" : "s"} need{queue.length === 1 ? "s" : ""} matching
+            </p>
+            <Button size="sm" variant="secondary" onClick={doBulk} disabled={bulkBusy}>
+              {bulkBusy ? "Matching…" : "Match all by sender phone"}
+            </Button>
+          </div>
+          <p className="mt-0.5 text-xs text-purple-700">
+            Money arrived via the M-Pesa menu with an unrecognised account number. Match it to a tenant or reject it.
+          </p>
+          {bulkMsg && <p className="mt-1 text-xs font-medium text-purple-900">{bulkMsg}</p>}
+          <ul className="mt-2 divide-y divide-purple-100">
+            {queue.slice(0, 8).map((r) => (
+              <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                <div>
+                  <p className="font-medium text-purple-950">
+                    <Money value={r.amount} /> · {r.trans_id}
+                  </p>
+                  <p className="text-xs text-purple-700">
+                    {r.bill_ref ? `account "${r.bill_ref}" · ` : "no account · "}
+                    {r.sender_name ?? r.msisdn} · {r.match_reason}
+                  </p>
+                </div>
+                <Button size="sm" variant="secondary" onClick={() => { setMatchFor(r.id); setTenantPick(""); setReason(""); setError(null); }}>
+                  Review
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </Card>
+
+      {active && (
+        <Modal title={`Match Paybill ${active.trans_id}`} onClose={close}>
+          <MatchModalBody
+            payment={active}
+            tenants={tenants}
+            tenantPick={tenantPick}
+            setTenantPick={setTenantPick}
+            reason={reason}
+            setReason={setReason}
+            busy={busy}
+            error={error}
+            onMatch={doMatch}
+            onReject={doReject}
+            onClose={close}
+          />
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function MatchModalBody({ payment, tenants, tenantPick, setTenantPick, reason, setReason, busy, error, onMatch, onReject, onClose }: {
+  payment: C2bPayment;
+  tenants: Tenant[];
+  tenantPick: string;
+  setTenantPick: (v: string) => void;
+  reason: string;
+  setReason: (v: string) => void;
+  busy: boolean;
+  error: string | null;
+  onMatch: () => void;
+  onReject: () => void;
+  onClose: () => void;
+}) {
+  const [suggestions, setSuggestions] = useState<C2bSuggestion[] | null>(null);
+  const [risk, setRisk] = useState<{ risk: string; checks: string[] } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    suggestC2bTenant(payment.id)
+      .then((s) => { if (alive) setSuggestions(s); })
+      .catch(() => { if (alive) setSuggestions([]); });
+    verifyC2bTransaction(payment.id)
+      .then((r) => { if (alive) setRisk(r); })
+      .catch(() => { if (alive) setRisk(null); });
+    return () => { alive = false; };
+  }, [payment.id]);
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg bg-slate-50 p-3 text-sm">
+        <p><Money value={payment.amount} className="font-bold" /> from {payment.sender_name ?? payment.msisdn}</p>
+        <p className="text-xs text-slate-500">
+          {payment.bill_ref ? `Account typed: "${payment.bill_ref}" · ` : ""}
+          {payment.match_reason}
+        </p>
+      </div>
+      {risk && (
+        <div className={`rounded-lg border p-3 text-sm ${risk.risk === "high" ? "border-red-200 bg-red-50 text-red-800" : risk.risk === "medium" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-green-200 bg-green-50 text-green-800"}`}>
+          <p className="font-semibold">Risk: {risk.risk}</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs">
+            {risk.checks.slice(0, 4).map((c, i) => (
+              <li key={i}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {suggestions !== null && suggestions.length > 0 && (
+        <div>
+          <p className="mb-1 text-sm font-medium text-slate-700">Likely tenants</p>
+          <ul className="space-y-1">
+            {suggestions.map((s) => (
+              <li key={s.tenant_id}>
+                <button
+                  type="button"
+                  onClick={() => setTenantPick(s.tenant_id)}
+                  className={`flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm hover:border-brand-300 hover:bg-brand-50/50 ${tenantPick === s.tenant_id ? "border-brand-400 bg-brand-50" : "border-slate-200"}`}
+                >
+                  <span>
+                    <span className="font-medium">{s.tenant_name}</span>
+                    <span className="ml-2 text-xs text-slate-500">{s.signals.join(" · ")}</span>
+                  </span>
+                  <span className="text-xs font-medium text-brand-700">{Math.round(s.score * 100)}%</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <Field label="Attach to tenant" required>
+        <Select value={tenantPick} onChange={(e) => setTenantPick(e.target.value)}>
+          <option value="">— Choose tenant —</option>
+          {tenants.filter((t) => t.status !== "moved_out").map((t) => (
+            <option key={t.id} value={t.id}>{t.full_name}</option>
+          ))}
+        </Select>
+      </Field>
+      <div>
+        <Button onClick={onMatch} disabled={busy || !tenantPick}>
+          {busy ? "Matching…" : "Match & record payment"}
+        </Button>
+      </div>
+      <div className="border-t border-slate-100 pt-3">
+        <Field label="Or reject (money stays with M-Pesa)">
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Test ping from Safaricom" />
+        </Field>
+        <div className="mt-2 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button variant="secondary" onClick={onReject} disabled={busy}>Reject</Button>
+        </div>
+      </div>
+      {error && <ErrorBanner message={error} />}
+    </div>
+  );
 }
