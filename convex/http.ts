@@ -20,14 +20,17 @@ function json(body: unknown, status = 200): Response {
 }
 
 /**
- * Public M-Pesa STK callback (Safaricom cannot send auth headers).
+ * Public STK callback (Safaricom cannot send auth headers).
  * The CheckoutRequestID is an unguessable capability linking the callback
  * to a pending row. Success writes go through one atomic mutation
  * (reconcileSuccessInternal): retried or racing callbacks dedupe instead
  * of writing a second payment. Failures just flip the tx row.
+ *
+ * NOTE: path deliberately free of the word "mpesa" — Daraja rejects
+ * callback URLs containing "MPESA" (400.003.02). Same for all routes here.
  */
 http.route({
-  path: "/mpesa-callback",
+  path: "/stk-callback",
   method: "OPTIONS",
   handler: httpAction(async () => {
     return new Response("ok", { status: 200, headers: cors() });
@@ -35,7 +38,7 @@ http.route({
 });
 
 http.route({
-  path: "/mpesa-callback",
+  path: "/stk-callback",
   method: "POST",
   handler: httpAction(async (ctx, req) => {
     const started = Date.now();
@@ -194,7 +197,7 @@ http.route({
  * review queue instead.
  */
 http.route({
-  path: "/mpesa-c2b-validation",
+  path: "/c2b-validation",
   method: "OPTIONS",
   handler: httpAction(async () => {
     return new Response("ok", { status: 200, headers: cors() });
@@ -202,7 +205,7 @@ http.route({
 });
 
 http.route({
-  path: "/mpesa-c2b-validation",
+  path: "/c2b-validation",
   method: "POST",
   handler: httpAction(async (_ctx, req) => {
     let body: Record<string, unknown>;
@@ -227,7 +230,7 @@ http.route({
 });
 
 http.route({
-  path: "/mpesa-c2b-confirmation",
+  path: "/c2b-confirmation",
   method: "OPTIONS",
   handler: httpAction(async () => {
     return new Response("ok", { status: 200, headers: cors() });
@@ -235,7 +238,7 @@ http.route({
 });
 
 http.route({
-  path: "/mpesa-c2b-confirmation",
+  path: "/c2b-confirmation",
   method: "POST",
   handler: httpAction(async (ctx, req) => {
     const started = Date.now();
@@ -349,7 +352,7 @@ http.route({
  * invoices and credit unwind exactly as a staff void would.
  */
 http.route({
-  path: "/mpesa-reversal",
+  path: "/stk-reversal",
   method: "OPTIONS",
   handler: httpAction(async () => {
     return new Response("ok", { status: 200, headers: cors() });
@@ -357,7 +360,7 @@ http.route({
 });
 
 http.route({
-  path: "/mpesa-reversal",
+  path: "/stk-reversal",
   method: "POST",
   handler: httpAction(async (ctx, req) => {
     const started = Date.now();

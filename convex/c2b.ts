@@ -9,7 +9,7 @@ import {
 import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { assertOrgMember, assertStaff, audit, normalizePhone } from "./lib/auth";
+import { assertOrgMember, assertStaff, audit, normalizePhone, siteBaseUrl } from "./lib/auth";
 import { recordPaymentCore, reversePaymentInTx } from "./lib/ledger";
 
 /** process.env in actions (Node runtime). Declared locally to avoid @types/node. */
@@ -789,7 +789,7 @@ export const reverseC2bInternal = internalMutation({
         c2b.paymentId,
         "refunded",
         `M-Pesa reversal ${transId}: ${args.reason}`,
-        "mpesa-reversal",
+        "stk-reversal",
       );
       await ctx.db.patch(c2b._id, {
         status: "rejected",
@@ -1016,7 +1016,7 @@ export const registerC2bUrls = action({
         "M-Pesa is not configured for this business. Save Daraja credentials first.",
       );
     }
-    const siteBase = (process.env.MPESA_CALLBACK_URL ?? "").replace(/\/$/, "");
+    const siteBase = siteBaseUrl(process.env);
     if (!siteBase) {
       throw new ConvexError(
         "Set MPESA_CALLBACK_URL env var to your Convex site URL first.",
@@ -1041,6 +1041,8 @@ export const registerC2bUrls = action({
     if (!tokenData.access_token) {
       throw new ConvexError("Daraja did not return an access token");
     }
+    const confirmUrl = `${siteBase}/c2b-confirmation`;
+    const validUrl = `${siteBase}/c2b-validation`;
     const regRes = await fetch(`${base}/mpesa/c2b/v1/registerurl`, {
       method: "POST",
       headers: {
@@ -1051,17 +1053,38 @@ export const registerC2bUrls = action({
       body: JSON.stringify({
         ShortCode: creds.shortcode,
         ResponseType: "Completed",
-        ConfirmationURL: `${siteBase}/mpesa-c2b-confirmation`,
-        ValidationURL: `${siteBase}/mpesa-c2b-validation`,
+        // NOTE: Daraja rejects callback URLs containing the word "MPESA"
+        // (error 400.003.02) — keep these paths free of it.
+        ConfirmationURL: confirmUrl,
+        ValidationURL: validUrl,
       }),
     });
-    const reg = (await regRes.json()) as {
-      ResponseCode?: string;
-      ResponseDescription?: string;
-    };
-    if (reg.ResponseCode !== "0") {
+    const rawBody = await regRes.text();
+    let reg: { ResponseCode?: string; ResponseDescription?: string };
+    try {
+      reg = JSON.parse(rawBody) as typeof reg;
+    } catch {
       throw new ConvexError(
-        reg.ResponseDescription ?? "C2B URL registration was rejected by Daraja",
+        `Daraja rejected registration (HTTP ${regRes.status}) with a non-JSON reply: ${rawBody.slice(0, 200)}`,
+      );
+    }
+    if (reg.ResponseCode !== "0") {
+      // Surface everything Daraja tells us: the description names the
+      // actual cause (till-vs-paybill, sandbox mismatch, bad URLs…).
+      // Include the exact URLs sent (public site URLs, not secrets) so a
+      // "banned word" rejection shows which part offends.
+      // Also log the attempt so the webhook log shows the rejection.
+      const confirmUrl = `${siteBase}/c2b-confirmation`;
+      const validUrl = `${siteBase}/c2b-validation`;
+      await ctx.runMutation(internal.c2b.logWebhookInternal, {
+        orgId: caller.orgId,
+        route: "c2b-register",
+        shortcode: creds.shortcode,
+        outcome: "register-rejected",
+        detail: `HTTP ${regRes.status} · ${reg.ResponseCode ?? "?"} · ${reg.ResponseDescription ?? rawBody.slice(0, 200)}`,
+      });
+      throw new ConvexError(
+        `Daraja said no (HTTP ${regRes.status}, code ${reg.ResponseCode ?? "?"}): ${reg.ResponseDescription ?? rawBody.slice(0, 300)} — shortcode ${creds.shortcode} on ${creds.environment}. Sent ConfirmationURL=${confirmUrl} ValidationURL=${validUrl}.`,
       );
     }
     await ctx.runMutation(internal.c2b.markC2bRegistered, {

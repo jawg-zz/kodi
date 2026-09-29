@@ -143,6 +143,18 @@ export function stkPassword(
   return btoa(`${shortcode}${passkey}${timestamp}`);
 }
 
+/**
+ * Public site base for Daraja callback URLs. MPESA_CALLBACK_URL holds the
+ * bare site URL (e.g. https://convex.spidmax.win) — never a path: Daraja
+ * rejects callback URLs containing the word "MPESA" (400.003.02), so no
+ * route path may contain it either (stk and c2b prefixes throughout).
+ */
+export function siteBaseUrl(env: Record<string, string | undefined>): string {
+  const raw = (env.MPESA_CALLBACK_URL ?? "").replace(/\/$/, "");
+  // Tolerate a legacy value that already includes the old STK callback path.
+  return raw.replace(/\/http\/mpesa-callback$/, "").replace(/\/mpesa-callback$/, "");
+}
+
 export function audit(
   ctx: MutationCtx,
   args: {
