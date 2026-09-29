@@ -150,9 +150,7 @@ export function stkPassword(
  * route path may contain it either (stk and c2b prefixes throughout).
  */
 export function siteBaseUrl(env: Record<string, string | undefined>): string {
-  const raw = (env.MPESA_CALLBACK_URL ?? "").replace(/\/$/, "");
-  // Tolerate a legacy value that already includes the old STK callback path.
-  return raw.replace(/\/http\/mpesa-callback$/, "").replace(/\/mpesa-callback$/, "");
+  return (env.MPESA_CALLBACK_URL ?? "").replace(/\/$/, "");
 }
 
 export function audit(
