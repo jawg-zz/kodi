@@ -1069,13 +1069,31 @@ export const registerC2bUrls = action({
       );
     }
     if (reg.ResponseCode !== "0") {
+      // "URLs are already registered" (500.003.1001) means a prior call —
+      // possibly an earlier tap whose response was lost — already stored
+      // these (or other) URLs at Daraja. Treat as success: the goal state
+      // (some registration live) holds; verify with a small live payment
+      // and check the webhook log if confirmations never arrive (they may
+      // point at older URLs, which only the Daraja portal can change).
+      const raw = `${reg.ResponseCode ?? ""} ${reg.ResponseDescription ?? rawBody}`;
+      if (/already registered/i.test(raw)) {
+        await ctx.runMutation(internal.c2b.logWebhookInternal, {
+          orgId: caller.orgId,
+          route: "c2b-register",
+          shortcode: creds.shortcode,
+          outcome: "register-already-live",
+          detail: rawBody.slice(0, 200),
+        });
+        await ctx.runMutation(internal.c2b.markC2bRegistered, {
+          orgId: caller.orgId,
+        });
+        return { registered: true };
+      }
       // Surface everything Daraja tells us: the description names the
       // actual cause (till-vs-paybill, sandbox mismatch, bad URLs…).
       // Include the exact URLs sent (public site URLs, not secrets) so a
       // "banned word" rejection shows which part offends.
       // Also log the attempt so the webhook log shows the rejection.
-      const confirmUrl = `${siteBase}/c2b-confirmation`;
-      const validUrl = `${siteBase}/c2b-validation`;
       await ctx.runMutation(internal.c2b.logWebhookInternal, {
         orgId: caller.orgId,
         route: "c2b-register",
