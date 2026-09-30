@@ -4,19 +4,36 @@ import { currentMonthKey, formatKES, monthLabel, parseKES } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import {
   applyCreditNow,
+  cancelMandate,
+  checkSimAge,
+  checkSimSwap,
+  createMandate,
   ensureTenantAccountCode,
   generateInvoices,
   getCreditLedger,
+  getKycChecks,
   getTenant,
   getTenantCredit,
   getTenantPortalLink,
+  hakikishaB2c,
+  listMandates,
   listTenantInvoices,
   listTenantPayments,
   listUnits,
+  payB2cRefund,
   settleDeposit,
   updateTenant,
+  validateTenantId,
 } from "../lib/api";
-import type { CreditLedgerEntry, InvoiceWithRefs, PaymentWithRefs, Tenant, Unit } from "../lib/types";
+import type {
+  CreditLedgerEntry,
+  InvoiceWithRefs,
+  KycCheck,
+  PaymentWithRefs,
+  RatibaMandate,
+  Tenant,
+  Unit,
+} from "../lib/types";
 import { Button } from "../components/Button";
 import { Field, Input, Textarea } from "../components/Field";
 import { Badge, Card, CardBody, ErrorBanner, Loading, PageHeader } from "../components/ui";
@@ -341,6 +358,9 @@ export function TenantDetailPage() {
         </CardBody>
       </Card>
 
+      {org && id && <MandatesCard orgId={org.id} tenantId={id} tenantPhone={tenant.phone} />}
+      {org && id && <KycCard orgId={org.id} tenantId={id} />}
+
       {showPay && (
         <Modal title={`Record payment — ${tenant.full_name}`} onClose={() => { setShowPay(false); setPayTargets([]); }}>
           <RecordPaymentFields
@@ -391,6 +411,169 @@ export function TenantDetailPage() {
   );
 }
 
+/** Ratiba autopay mandates: create (tenant PIN-consents), cancel. */
+function MandatesCard({ orgId, tenantId, tenantPhone }: {
+  orgId: string;
+  tenantId: string;
+  tenantPhone: string;
+}) {
+  const [mandates, setMandates] = useState<RatibaMandate[]>([]);
+  const [name, setName] = useState("");
+  const [amount, setAmount] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => {
+    listMandates(tenantId).then(setMandates).catch(() => setMandates([]));
+  };
+
+  useEffect(() => { load(); }, [tenantId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const create = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const value = Math.round(Number(amount));
+    if (!name.trim() || !Number.isFinite(value) || value < 1) {
+      setError("Mandate name and a KES amount are required.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const r = await createMandate({
+        orgId,
+        tenantId,
+        mandateName: name.trim(),
+        amount: value,
+        phone: tenantPhone,
+      });
+      setName("");
+      setAmount("");
+      setMsg(`Mandate sent — the tenant PIN-confirms on their handset (${r.conversation_id}).`);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancel = async (id: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await cancelMandate(id);
+      setMsg("Mandate cancelled.");
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="mt-4">
+      <CardBody>
+        <h2 className="mb-1 font-semibold">Rent autopay (Ratiba)</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          Tenant authorises once; debits recur monthly. Commercial API — needs a signed Safaricom agreement.
+        </p>
+        {mandates.length > 0 && (
+          <ul className="mb-3 divide-y divide-slate-100 text-sm">
+            {mandates.map((m) => (
+              <li key={m.id} className="flex items-center justify-between py-1.5">
+                <span>
+                  <strong>{m.mandate_name}</strong> · <Money value={m.amount} />/mo ·{" "}
+                  <Badge tone={m.status === "active" ? "green" : m.status === "cancelled" ? "slate" : "amber"}>{m.status}</Badge>
+                </span>
+                {m.status !== "cancelled" && (
+                  <Button size="sm" variant="secondary" onClick={() => cancel(m.id)} disabled={busy}>
+                    Cancel
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <form onSubmit={create} className="flex max-w-lg flex-wrap items-end gap-2">
+          <Field label="Mandate name">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. RENT-A1" className="max-w-44" />
+          </Field>
+          <Field label="Monthly amount (KES)">
+            <Input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="numeric" placeholder="20000" className="max-w-36" />
+          </Field>
+          <Button type="submit" variant="secondary" disabled={busy}>{busy ? "Sending…" : "Create mandate"}</Button>
+        </form>
+        {error && <div className="mt-2 max-w-lg"><ErrorBanner message={error} /></div>}
+        {msg && <p className="mt-2 text-sm text-green-700">{msg}</p>}
+      </CardBody>
+    </Card>
+  );
+}
+
+/** KYC + fraud signals: cached per tenant, rebilled only on re-check. */
+function KycCard({ orgId, tenantId }: { orgId: string; tenantId: string }) {
+  const [checks, setChecks] = useState<KycCheck[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => {
+    getKycChecks(tenantId).then(setChecks).catch(() => setChecks([]));
+  };
+
+  useEffect(() => { load(); }, [tenantId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const run = async (label: string, fn: () => Promise<unknown>) => {
+    setBusy(label);
+    setError(null);
+    try {
+      await fn();
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Card className="mt-4">
+      <CardBody>
+        <h2 className="mb-1 font-semibold">Identity & fraud signals</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          Authoritative checks behind the national-ID fallback. Commercial per-call billing — results are cached.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => run("id", () => validateTenantId(orgId, tenantId))}>
+            {busy === "id" ? "Checking…" : "Verify national ID"}
+          </Button>
+          <Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => run("swap", () => checkSimSwap(orgId, tenantId))}>
+            {busy === "swap" ? "Checking…" : "Check SIM swap"}
+          </Button>
+          <Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => run("age", () => checkSimAge(orgId, tenantId))}>
+            {busy === "age" ? "Checking…" : "Check SIM age"}
+          </Button>
+        </div>
+        {error && <div className="mt-2 max-w-lg"><ErrorBanner message={error} /></div>}
+        {checks.length > 0 && (
+          <ul className="mt-3 divide-y divide-slate-100 text-sm">
+            {checks.map((c, i) => (
+              <li key={i} className="py-1.5">
+                <span className="font-medium">{c.check_type.replace("_", " ")}</span>
+                {" · "}{c.result}
+                <span className="ml-2 text-xs text-slate-400">{c.checked_at.slice(0, 10)}</span>
+                {c.detail && <p className="text-xs text-slate-500">{c.detail}</p>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
 export function SettleDepositModal({ orgId, tenant, outstanding, onClose, onSettled }: {
   orgId: string;
   tenant: Tenant;
@@ -400,6 +583,8 @@ export function SettleDepositModal({ orgId, tenant, outstanding, onClose, onSett
 }) {
   const [lines, setLines] = useState<{ label: string; amount: string }[]>([{ label: "Repairs", amount: "" }]);
   const [notes, setNotes] = useState("");
+  const [payViaMpesa, setPayViaMpesa] = useState(false);
+  const [hakikisha, setHakikisha] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -419,7 +604,27 @@ export function SettleDepositModal({ orgId, tenant, outstanding, onClose, onSett
     setBusy(true);
     setError(null);
     try {
-      await settleDeposit(orgId, tenant, parsed, refund, notes.trim() || null);
+      const settlement = await settleDeposit(orgId, tenant, parsed, refund, notes.trim() || null);
+      if (payViaMpesa && refund >= 10) {
+        try {
+          const check = await hakikishaB2c(orgId, tenant.phone);
+          setHakikisha(
+            check.first_name
+              ? `Hakikisha: ${check.first_name} ${check.masked_name ?? ""} — name matches, sending…`
+              : "Hakikisha returned no name — sending anyway; confirm the number with the tenant.",
+          );
+        } catch {
+          setHakikisha("Hakikisha unavailable — sending without name check; confirm the number with the tenant.");
+        }
+        await payB2cRefund({
+          orgId,
+          tenantId: tenant.id,
+          phone: tenant.phone,
+          amount: refund,
+          settlementId: settlement.id,
+          remarks: "Kodi deposit refund",
+        });
+      }
       onSettled();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -455,6 +660,19 @@ export function SettleDepositModal({ orgId, tenant, outstanding, onClose, onSett
         <Field label="Notes">
           <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Move-out condition, refund method…" />
         </Field>
+        <label className="flex items-start gap-2 text-sm text-slate-600">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={payViaMpesa}
+            onChange={(e) => setPayViaMpesa(e.target.checked)}
+          />
+          <span>
+            Pay the refund via M-Pesa (B2C) to {tenant.phone} — with a Hakikisha name check first.
+            Needs a funded Bulk shortcode (Settings → Initiator & payouts → float top-up).
+          </span>
+        </label>
+        {hakikisha && <p className="text-xs text-slate-500">{hakikisha}</p>}
         <div className="rounded-lg bg-slate-50 p-3 text-sm">
           <p>Total deductions: <Money value={total} className="font-semibold" /></p>
           <p>Refund to tenant: <Money value={refund} className="font-semibold text-brand-600" /></p>

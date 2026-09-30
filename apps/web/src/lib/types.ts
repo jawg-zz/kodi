@@ -205,6 +205,110 @@ export interface C2bStatusView {
   registered_at: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Extended Daraja tracks (verify / payouts / billmanager / collect /
+// ratiba / bonga / fraud). Backend: convex/{verify,payouts,billManager,
+// collect,ratiba,bonga,fraud}.ts
+// ---------------------------------------------------------------------------
+export type DarajaJobKind =
+  | "txn_status"
+  | "balance"
+  | "reversal"
+  | "b2c"
+  | "topup"
+  | "b2b"
+  | "tax"
+  | "pull";
+
+export type DarajaJobStatus = "pending" | "done" | "failed";
+
+export interface DarajaJob {
+  id: string;
+  org_id: string;
+  kind: DarajaJobKind;
+  conversation_id: string;
+  status: DarajaJobStatus;
+  request_summary?: string | null;
+  result_code?: string | null;
+  result_desc?: string | null;
+  payment_id?: string | null;
+  tenant_id?: string | null;
+  amount?: number | null;
+  created_at: string;
+}
+
+export interface InitiatorStatusView {
+  configured: boolean;
+  initiator_name: string;
+  cert_subject?: string | null;
+  cert_expired?: boolean | null;
+}
+
+export interface BalanceSnapshot {
+  balances: { account: string; balance: number }[];
+  conversation_id?: string | null;
+}
+
+export interface StatusLookup {
+  status: string;
+  result_code?: string | null;
+  result_desc?: string | null;
+  conversation_id: string;
+}
+
+export interface SettlementPayout {
+  b2c_status?: string | null;
+  b2c_conversation_id?: string | null;
+  b2c_receipt?: string | null;
+}
+
+export interface BillManagerState {
+  opted_in: boolean;
+  email?: string | null;
+  last_mirrored_at?: string | null;
+  seen_count: number;
+}
+
+export interface InvoiceQr {
+  qr_base64: string;
+  amount: number;
+  ref_no: string;
+}
+
+export interface ShortcodeCheck {
+  org_name?: string | null;
+  tariff?: string | null;
+  raw: string;
+}
+
+export type MandateStatus = "pending" | "active" | "cancelled";
+
+export interface RatibaMandate {
+  id: string;
+  org_id: string;
+  tenant_id: string;
+  tenant_name?: string | null;
+  mandate_name: string;
+  amount: number;
+  frequency: string;
+  status: MandateStatus;
+  daraja_ref?: string | null;
+  created_at: string;
+}
+
+export interface BongaQuote {
+  points: number;
+  value_kes: number;
+  raw: string;
+}
+
+export interface KycCheck {
+  check_type: string;
+  result: string;
+  detail?: string | null;
+  checked_at: string;
+}
+
 export interface DepositSettlement {
   id: string;
   org_id: string;

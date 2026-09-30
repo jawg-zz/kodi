@@ -4,6 +4,9 @@ import type {
   AllocationPreview,
   ArrearsAging,
   AuditEvent,
+  BalanceSnapshot,
+  BillManagerState,
+  BongaQuote,
   C2bPayment,
   C2bRiskReview,
   C2bStatusView,
@@ -11,10 +14,15 @@ import type {
   CollectionMonth,
   CreditLedgerEntry,
   DailyClose,
+  DarajaJob,
+  DarajaJobKind,
   DepositSettlement,
   DepositsAndCredits,
+  InitiatorStatusView,
   Invoice,
+  InvoiceQr,
   InvoiceWithRefs,
+  KycCheck,
   MpesaHealth,
   MpesaTransaction,
   Org,
@@ -24,7 +32,11 @@ import type {
   PaymentsBreakdown,
   PaymentWithRefs,
   Property,
+  RatibaMandate,
   RentRoll,
+  SettlementPayout,
+  ShortcodeCheck,
+  StatusLookup,
   Tenant,
   TenantUserLink,
   Unit,
@@ -1023,6 +1035,680 @@ export async function registerC2bUrls(): Promise<boolean> {
       {},
     )) as any;
     return row.registered;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Owner: switch C2B validation strictness (accept_all vs strict). */
+export async function setValidationMode(
+  orgId: string,
+  mode: "accept_all" | "strict",
+): Promise<void> {
+  try {
+    await convex.mutation((api as any).c2b.setValidationMode, {
+      orgId,
+      mode,
+    });
+  } catch (e) {
+    return err(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Extended Daraja tracks: initiator, verify, payouts, bill manager,
+// QR/shortcode check, Ratiba, Bonga, fraud. Translators stay snake_case.
+// ---------------------------------------------------------------------------
+function toDarajaJob(r: any): DarajaJob {
+  return {
+    id: r._id,
+    org_id: r.orgId,
+    kind: r.kind,
+    conversation_id: r.conversationId,
+    status: r.status,
+    request_summary: r.requestSummary ?? null,
+    result_code: r.resultCode ?? null,
+    result_desc: r.resultDesc ?? null,
+    payment_id: r.paymentId ?? null,
+    tenant_id: r.tenantId ?? null,
+    amount: r.amount ?? null,
+    created_at: iso(r._creationTime),
+  };
+}
+
+export async function getInitiatorStatus(): Promise<InitiatorStatusView> {
+  try {
+    const row = (await convex.query(
+      (api as any).mpesa.getInitiatorStatus,
+      {},
+    )) as any;
+    return {
+      configured: row.configured,
+      initiator_name: row.initiatorName,
+      cert_subject: row.certSubject ?? null,
+      cert_expired: row.certExpired ?? null,
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function saveInitiatorCreds(values: {
+  initiatorName: string;
+  initiatorPassword: string;
+  initiatorCertPem: string;
+}): Promise<{ cert_subject: string; cert_valid_to: string; cert_key_bits: number }> {
+  try {
+    const row = (await convex.action(
+      (api as any).mpesa.saveInitiatorCreds,
+      values,
+    )) as any;
+    return {
+      cert_subject: row.certSubject,
+      cert_valid_to: row.certValidTo,
+      cert_key_bits: row.certKeyBits,
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function queryTransactionStatus(args: {
+  orgId: string;
+  transactionId?: string;
+  originatorConversationId?: string;
+  partyA?: string;
+  remarks?: string;
+}): Promise<{ conversation_id: string; job_id: string }> {
+  try {
+    const row = (await convex.action(
+      (api as any).verify.queryTransactionStatus,
+      args,
+    )) as any;
+    return { conversation_id: row.conversationId, job_id: row.jobId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function latestStatusFor(
+  orgId: string,
+  transactionId: string,
+): Promise<StatusLookup | null> {
+  try {
+    const row = (await convex.query((api as any).verify.latestStatusFor, {
+      orgId,
+      transactionId,
+    })) as any;
+    if (!row) return null;
+    return {
+      status: row.status,
+      result_code: row.resultCode ?? null,
+      result_desc: row.resultDesc ?? null,
+      conversation_id: row.conversationId,
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function queryAccountBalance(
+  orgId: string,
+): Promise<{ conversation_id: string; job_id: string }> {
+  try {
+    const row = (await convex.action(
+      (api as any).verify.queryAccountBalance,
+      { orgId },
+    )) as any;
+    return { conversation_id: row.conversationId, job_id: row.jobId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function latestBalance(orgId: string): Promise<BalanceSnapshot> {
+  try {
+    const row = (await convex.query((api as any).verify.latestBalance, {
+      orgId,
+    })) as any;
+    return {
+      balances: (row.balances ?? []).map((b: any) => ({
+        account: b.account,
+        balance: b.balance,
+      })),
+      conversation_id: row.conversationId ?? null,
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function registerPull(orgId: string): Promise<boolean> {
+  try {
+    const row = (await convex.action((api as any).verify.registerPull, {
+      orgId,
+    })) as any;
+    return row.registered;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function pullC2bWindow(args: {
+  orgId: string;
+  startDate?: string;
+  endDate?: string;
+  offset?: number;
+}): Promise<{ pulled: number; ingested: number; matched: number; queued: number }> {
+  try {
+    return (await convex.action((api as any).verify.pullC2bWindow, args)) as {
+      pulled: number;
+      ingested: number;
+      matched: number;
+      queued: number;
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function listDarajaJobs(
+  orgId: string,
+  kind?: DarajaJobKind,
+): Promise<DarajaJob[]> {
+  try {
+    const rows = (await convex.query((api as any).darajaJobs.listDarajaJobs, {
+      orgId,
+      kind,
+    })) as any[];
+    return rows.map(toDarajaJob);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function reverseDarajaPayment(args: {
+  orgId: string;
+  paymentId: string;
+  receiverParty?: string;
+  remarks?: string;
+}): Promise<{ conversation_id: string; job_id: string }> {
+  try {
+    const row = (await convex.action(
+      (api as any).payouts.reverseDarajaPayment,
+      args,
+    )) as any;
+    return { conversation_id: row.conversationId, job_id: row.jobId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function payB2cRefund(args: {
+  orgId: string;
+  tenantId: string;
+  phone: string;
+  amount: number;
+  commandId?: "BusinessPayment" | "SalaryPayment" | "PromotionPayment";
+  settlementId?: string;
+  remarks?: string;
+}): Promise<{ conversation_id: string; job_id: string }> {
+  try {
+    const row = (await convex.action(
+      (api as any).payouts.payB2cRefund,
+      args,
+    )) as any;
+    return { conversation_id: row.conversationId, job_id: row.jobId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function topUpFloat(
+  orgId: string,
+  amount: number,
+): Promise<{ conversation_id: string; job_id: string }> {
+  try {
+    const row = (await convex.action((api as any).payouts.topUpFloat, {
+      orgId,
+      amount,
+    })) as any;
+    return { conversation_id: row.conversationId, job_id: row.jobId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function payBusinessBill(args: {
+  orgId: string;
+  commandId: "BusinessPayBill" | "BusinessBuyGoods" | "BusinessTransferFromMMFToUtility";
+  partyB: string;
+  amount: number;
+  accountReference?: string;
+  requester?: string;
+  remarks?: string;
+}): Promise<{ conversation_id: string; job_id: string }> {
+  try {
+    const row = (await convex.action(
+      (api as any).payouts.payBusinessBill,
+      args,
+    )) as any;
+    return { conversation_id: row.conversationId, job_id: row.jobId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function payToPochi(args: {
+  orgId: string;
+  phone: string;
+  amount: number;
+  remarks?: string;
+}): Promise<{ conversation_id: string; job_id: string }> {
+  try {
+    const row = (await convex.action((api as any).payouts.payToPochi, args)) as any;
+    return { conversation_id: row.conversationId, job_id: row.jobId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function hakikishaB2c(
+  orgId: string,
+  phone: string,
+): Promise<{ first_name?: string | null; masked_name?: string | null; raw: string }> {
+  try {
+    const row = (await convex.action((api as any).payouts.hakikishaB2c, {
+      orgId,
+      phone,
+    })) as any;
+    return {
+      first_name: row.firstName ?? null,
+      masked_name: row.maskedName ?? null,
+      raw: row.raw,
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function remitTax(args: {
+  orgId: string;
+  amount: number;
+  kraPrn: string;
+  remarks?: string;
+}): Promise<{ conversation_id: string; job_id: string }> {
+  try {
+    const row = (await convex.action((api as any).payouts.remitTax, args)) as any;
+    return { conversation_id: row.conversationId, job_id: row.jobId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getSettlementPayout(
+  settlementId: string,
+): Promise<SettlementPayout | null> {
+  try {
+    const row = (await convex.query((api as any).payouts.getSettlementPayout, {
+      settlementId,
+    })) as any;
+    if (!row) return null;
+    return {
+      b2c_status: row.b2cStatus ?? null,
+      b2c_conversation_id: row.b2cConversationId ?? null,
+      b2c_receipt: row.b2cReceipt ?? null,
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getBillManagerState(
+  orgId: string,
+): Promise<BillManagerState> {
+  try {
+    const row = (await convex.query(
+      (api as any).billManager.getBillManagerState,
+      { orgId },
+    )) as any;
+    return {
+      opted_in: row.optedIn,
+      email: row.email ?? null,
+      last_mirrored_at: row.lastMirroredAt ? iso(row.lastMirroredAt) : null,
+      seen_count: row.seenCount,
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function optInBillManager(args: {
+  orgId: string;
+  email: string;
+  officialContact: string;
+  sendReminders: boolean;
+}): Promise<boolean> {
+  try {
+    const row = (await convex.action(
+      (api as any).billManager.optInBillManager,
+      args,
+    )) as any;
+    return row.optedIn;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function mirrorInvoicesToBillManager(args: {
+  orgId: string;
+  month?: string;
+}): Promise<{ mirrored: number; failed: number }> {
+  try {
+    return (await convex.action(
+      (api as any).billManager.mirrorInvoicesToBillManager,
+      args,
+    )) as { mirrored: number; failed: number };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function mintInvoiceQr(
+  invoiceId: string,
+  merchantName?: string,
+): Promise<InvoiceQr> {
+  try {
+    const row = (await convex.action((api as any).collect.mintInvoiceQr, {
+      invoiceId,
+      merchantName,
+    })) as any;
+    return { qr_base64: row.qrBase64, amount: row.amount, ref_no: row.refNo };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getInvoiceQr(
+  invoiceId: string,
+): Promise<InvoiceQr | null> {
+  try {
+    const row = (await convex.query((api as any).collect.getInvoiceQr, {
+      invoiceId,
+    })) as any;
+    if (!row) return null;
+    return { qr_base64: row.qrBase64, amount: row.amount, ref_no: row.refNo };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function verifyShortcodeOwner(args: {
+  orgId: string;
+  shortcode?: string;
+}): Promise<ShortcodeCheck> {
+  try {
+    const row = (await convex.action(
+      (api as any).collect.verifyShortcodeOwner,
+      args,
+    )) as any;
+    return { org_name: row.orgName ?? null, tariff: row.tariff ?? null, raw: row.raw };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+function toMandate(r: any): RatibaMandate {
+  return {
+    id: r._id,
+    org_id: r.orgId,
+    tenant_id: r.tenantId,
+    tenant_name: r.tenantName ?? null,
+    mandate_name: r.mandateName,
+    amount: r.amount,
+    frequency: r.frequency,
+    status: r.status,
+    daraja_ref: r.darajaRef ?? null,
+    created_at: iso(r._creationTime),
+  };
+}
+
+export async function listMandates(tenantId: string): Promise<RatibaMandate[]> {
+  try {
+    const rows = (await convex.query((api as any).ratiba.listMandates, {
+      tenantId,
+    })) as any[];
+    return rows.map(toMandate);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function createMandate(args: {
+  orgId: string;
+  tenantId: string;
+  mandateName: string;
+  amount: number;
+  phone: string;
+  frequency?: string;
+  startDate?: string;
+  endDate?: string;
+}): Promise<{ mandate_id: string; conversation_id: string }> {
+  try {
+    const row = (await convex.action((api as any).ratiba.createMandate, args)) as any;
+    return { mandate_id: row.mandateId, conversation_id: row.conversationId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function cancelMandate(
+  mandateId: string,
+): Promise<{ conversation_id: string }> {
+  try {
+    const row = (await convex.action((api as any).ratiba.cancelMandate, {
+      mandateId,
+    })) as any;
+    return { conversation_id: row.conversationId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function confirmMandate(mandateId: string): Promise<void> {
+  try {
+    await convex.mutation((api as any).ratiba.confirmMandate, { mandateId });
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function amendMandate(args: {
+  mandateId: string;
+  amount?: number;
+  endDate?: string;
+}): Promise<{ conversation_id: string }> {
+  try {
+    const row = (await convex.action((api as any).ratiba.amendMandate, args)) as any;
+    return { conversation_id: row.conversationId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function noteJob(jobId: string, note: string): Promise<void> {
+  try {
+    await convex.mutation((api as any).darajaJobs.noteJob, { jobId, note });
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function checkImsi(
+  orgId: string,
+  tenantId: string,
+): Promise<{ result: string; detail: string }> {
+  try {
+    return (await convex.action((api as any).fraud.checkImsi, {
+      orgId,
+      tenantId,
+    })) as { result: string; detail: string };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function expressCheckoutPush(args: {
+  orgId: string;
+  operatorId: string;
+  operatorPin: string;
+  amount: number;
+}): Promise<{ conversation_id: string; job_id: string }> {
+  try {
+    const row = (await convex.action(
+      (api as any).payouts.expressCheckoutPush,
+      args,
+    )) as any;
+    return { conversation_id: row.conversationId, job_id: row.jobId };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function cancelBillManagerInvoice(args: {
+  orgId: string;
+  externalReference: string;
+  bulk?: boolean;
+}): Promise<void> {
+  try {
+    await convex.action((api as any).billManager.cancelBillManagerInvoice, args);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function updateBillManagerDetails(args: {
+  orgId: string;
+  email?: string;
+  officialContact?: string;
+  sendReminders?: boolean;
+}): Promise<void> {
+  try {
+    await convex.action((api as any).billManager.updateBillManagerDetails, args);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function acknowledgeBillManagerReceipt(
+  orgId: string,
+  transactionId: string,
+): Promise<void> {
+  try {
+    await convex.mutation(
+      (api as any).billManager.acknowledgeBillManagerReceipt,
+      { orgId, transactionId },
+    );
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function quoteBongaPoints(
+  orgId: string,
+  phone: string,
+): Promise<BongaQuote> {
+  try {
+    const row = (await convex.action((api as any).bonga.quoteBongaPoints, {
+      orgId,
+      phone,
+    })) as any;
+    return { points: row.points, value_kes: row.valueKes, raw: row.raw };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function redeemBongaPoints(args: {
+  orgId: string;
+  tenantId: string;
+  phone: string;
+  points: number;
+}): Promise<{ raw: string }> {
+  try {
+    return (await convex.action((api as any).bonga.redeemBongaPoints, args)) as {
+      raw: string;
+    };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function saveBongaCreds(args: {
+  orgId: string;
+  username: string;
+  password: string;
+}): Promise<void> {
+  try {
+    await convex.action((api as any).fraud.saveBongaCreds, args);
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function validateTenantId(
+  orgId: string,
+  tenantId: string,
+): Promise<{ result: string; detail: string }> {
+  try {
+    return (await convex.action((api as any).fraud.validateTenantId, {
+      orgId,
+      tenantId,
+    })) as { result: string; detail: string };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function checkSimSwap(
+  orgId: string,
+  tenantId: string,
+): Promise<{ result: string; detail: string }> {
+  try {
+    return (await convex.action((api as any).fraud.checkSimSwap, {
+      orgId,
+      tenantId,
+    })) as { result: string; detail: string };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function checkSimAge(
+  orgId: string,
+  tenantId: string,
+): Promise<{ result: string; detail: string }> {
+  try {
+    return (await convex.action((api as any).fraud.checkSimAge, {
+      orgId,
+      tenantId,
+    })) as { result: string; detail: string };
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export async function getKycChecks(tenantId: string): Promise<KycCheck[]> {
+  try {
+    const rows = (await convex.query((api as any).fraud.getKycChecks, {
+      tenantId,
+    })) as any[];
+    return rows.map((r: any) => ({
+      check_type: r.checkType,
+      result: r.result,
+      detail: r.detail ?? null,
+      checked_at: iso(r.checkedAt),
+    }));
   } catch (e) {
     return err(e);
   }

@@ -18,13 +18,18 @@ import {
   getMpesaHealth,
   getPaymentsBreakdown,
   getRentRoll,
+  latestBalance,
+  listDarajaJobs,
   listProperties,
+  topUpFloat,
 } from "../lib/api";
 import type {
   ArrearsAging,
   AuditEvent,
+  BalanceSnapshot,
   CollectionMonth,
   DailyClose,
+  DarajaJob,
   DepositsAndCredits,
   MpesaHealth,
   PaymentsBreakdown,
@@ -86,6 +91,8 @@ export function ReportsPage() {
   const [deposits, setDeposits] = useState<DepositsAndCredits | null>(null);
   const [dailyClose, setDailyClose] = useState<DailyClose | null>(null);
   const [audit, setAudit] = useState<AuditEvent[]>([]);
+  const [balance, setBalance] = useState<BalanceSnapshot | null>(null);
+  const [outJobs, setOutJobs] = useState<DarajaJob[]>([]);
 
   const [start, end] = monthsForPreset(preset, startMonth, endMonth);
   const propFilter = propertyId === "all" ? undefined : propertyId;
@@ -123,6 +130,21 @@ export function ReportsPage() {
       setDeposits(dep);
       setDailyClose(close);
       setAudit(trail);
+      try {
+        setBalance(await latestBalance(org.id));
+      } catch {
+        setBalance(null);
+      }
+      try {
+        const [b2c, rev, top] = await Promise.all([
+          listDarajaJobs(org.id, "b2c").catch(() => []),
+          listDarajaJobs(org.id, "reversal").catch(() => []),
+          listDarajaJobs(org.id, "topup").catch(() => []),
+        ]);
+        setOutJobs([...b2c, ...rev, ...top].slice(0, 20));
+      } catch {
+        setOutJobs([]);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -479,6 +501,15 @@ export function ReportsPage() {
         </Card>
       </div>
 
+      {org && (
+        <PayoutsCard
+          orgId={org.id}
+          balance={balance}
+          jobs={outJobs}
+          onChanged={load}
+        />
+      )}
+
       <Card className="mt-4">
         <CardBody>
           <h2 className="mb-1 font-semibold">Daily close</h2>
@@ -628,5 +659,94 @@ export function ReportsPage() {
         </CardBody>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Payouts & float: latest M-Pesa balance snapshot, MMF→Utility top-up,
+ * and recent B2C/reversal/topup job history.
+ */
+function PayoutsCard({ orgId, balance, jobs, onChanged }: {
+  orgId: string;
+  balance: BalanceSnapshot | null;
+  jobs: DarajaJob[];
+  onChanged: () => Promise<void>;
+}) {
+  const [amount, setAmount] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const topUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const value = Math.round(Number(amount));
+    if (!Number.isFinite(value) || value <= 0) {
+      setError("Enter a top-up amount in KES.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const r = await topUpFloat(orgId, value);
+      setAmount("");
+      setMsg(`Top-up accepted (${r.conversation_id}) — the result lands on the job row below.`);
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="mt-4">
+      <CardBody>
+        <h2 className="mb-1 font-semibold">Payouts & float</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          B2C refunds debit the Utility account — keep it funded from MMF. Balance snapshots come from the
+          Account Balance query (Settings → Verification, or the nightly job).
+        </p>
+        {balance && balance.balances.length > 0 ? (
+          <div className="mb-3 flex flex-wrap gap-2">
+            {balance.balances.map((b) => (
+              <Badge key={b.account} tone="blue">
+                {b.account}: {fmtKES(b.balance)}
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <p className="mb-3 text-sm text-slate-500">No balance snapshot yet — run “Check balance” in Settings → Verification.</p>
+        )}
+        <form onSubmit={topUp} className="flex max-w-lg flex-wrap items-end gap-2">
+          <Field label="Top up float MMF → Utility (KES)">
+            <input
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              inputMode="numeric"
+              placeholder="50000"
+              className="w-full max-w-44 rounded-lg border border-slate-200 p-2 text-sm"
+            />
+          </Field>
+          <Button type="submit" variant="secondary" disabled={busy}>{busy ? "Sending…" : "Top up float"}</Button>
+        </form>
+        {error && <div className="mt-2 max-w-lg"><ErrorBanner message={error} /></div>}
+        {msg && <p className="mt-2 text-sm text-green-700">{msg}</p>}
+        {jobs.length > 0 && (
+          <ul className="mt-3 divide-y divide-slate-100 text-sm">
+            {jobs.map((j) => (
+              <li key={j.id} className="flex items-center justify-between gap-2 py-1.5">
+                <span className="truncate">
+                  <Badge tone={j.status === "done" ? "green" : j.status === "failed" ? "red" : "amber"}>{j.status}</Badge>{" "}
+                  <span className="ml-1 font-mono text-xs text-slate-500">{j.kind}</span>{" "}
+                  <span className="text-slate-600">{j.request_summary ?? j.conversation_id}</span>
+                </span>
+                <span className="shrink-0 text-xs text-slate-400">{(j.result_desc ?? "").slice(0, 60)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
   );
 }

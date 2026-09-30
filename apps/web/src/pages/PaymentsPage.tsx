@@ -14,8 +14,12 @@ import {
   listTenants,
   listWebhookLog,
   matchC2bPayment,
+  queryTransactionStatus,
+  quoteBongaPoints,
+  redeemBongaPoints,
   refundPayment,
   rejectC2bPayment,
+  reverseDarajaPayment,
   suggestC2bTenant,
   verifyC2bTransaction,
   voidPayment,
@@ -365,12 +369,14 @@ function RecordAnyPaymentModal({ orgId, tenants, onClose, onRecorded }: {
 }
 
 export function ReceiptPage() {
+  const { org } = useAuth();
   const { id } = useParams<{ id: string }>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [payment, setPayment] = useState<PaymentWithRefs | null>(null);
   const [ledger, setLedger] = useState<{ id: string; note: string | null; created_at: string }[]>([]);
   const [reverseMode, setReverseMode] = useState<"void" | "refund" | null>(null);
+  const [darajaReversing, setDarajaReversing] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -439,6 +445,26 @@ export function ReceiptPage() {
     }
   };
 
+  const doDarajaReverse = async () => {
+    if (!id || !org || !payment?.mpesa_code) return;
+    setDarajaReversing(true);
+    setError(null);
+    try {
+      const r = await reverseDarajaPayment({
+        orgId: org.id,
+        paymentId: id,
+        remarks: reason.trim() || "Kodi duplicate-debit reversal",
+      });
+      setNotice(
+        `Reversal accepted at Daraja (${r.conversation_id}). The payment auto-voids when the completion callback arrives — track it in Settings → Verification.`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDarajaReversing(false);
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -450,6 +476,11 @@ export function ReceiptPage() {
               <>
                 <Button variant="secondary" onClick={() => setReverseMode("void")}>Void…</Button>
                 <Button variant="secondary" onClick={() => setReverseMode("refund")}>Refund…</Button>
+                {payment.mpesa_code && (
+                  <Button variant="secondary" onClick={doDarajaReverse} disabled={darajaReversing}>
+                    {darajaReversing ? "Reversing…" : "Reverse at Daraja"}
+                  </Button>
+                )}
               </>
             )}
             <Link to={`/print/receipt/${payment.id}`} target="_blank" rel="noreferrer">
@@ -788,6 +819,11 @@ function MatchModalBody({ payment, tenants, tenantPick, setTenantPick, reason, s
 }) {
   const [suggestions, setSuggestions] = useState<C2bSuggestion[] | null>(null);
   const [risk, setRisk] = useState<{ risk: string; checks: string[] } | null>(null);
+  const [darajaStatus, setDarajaStatus] = useState<string | null>(null);
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [bonga, setBonga] = useState<{ points: number; value_kes: number } | null>(null);
+  const [bongaBusy, setBongaBusy] = useState(false);
+  const [bongaMsg, setBongaMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -799,6 +835,52 @@ function MatchModalBody({ payment, tenants, tenantPick, setTenantPick, reason, s
       .catch(() => { if (alive) setRisk(null); });
     return () => { alive = false; };
   }, [payment.id]);
+
+  const orgId = tenants.find((t) => t.id === tenantPick)?.org_id
+    ?? tenants[0]?.org_id
+    ?? "";
+
+  const checkDaraja = async () => {
+    if (!orgId) return;
+    setStatusBusy(true);
+    setDarajaStatus(null);
+    try {
+      const r = await queryTransactionStatus({ orgId, transactionId: payment.trans_id });
+      setDarajaStatus(`Accepted (${r.conversation_id}) — the authoritative tier lands in Settings → Verification.`);
+    } catch (e) {
+      setDarajaStatus(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStatusBusy(false);
+    }
+  };
+
+  const quoteBonga = async () => {
+    if (!orgId) return;
+    setBongaBusy(true);
+    setBongaMsg(null);
+    try {
+      const q = await quoteBongaPoints(orgId, payment.msisdn);
+      setBonga({ points: q.points, value_kes: q.value_kes });
+    } catch (e) {
+      setBongaMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBongaBusy(false);
+    }
+  };
+
+  const redeemBonga = async () => {
+    if (!orgId || !tenantPick || !bonga) return;
+    setBongaBusy(true);
+    setBongaMsg(null);
+    try {
+      await redeemBongaPoints({ orgId, tenantId: tenantPick, phone: payment.msisdn, points: bonga.points });
+      setBongaMsg(`Redeemed ${bonga.points} pts (~${bonga.value_kes} KES) — the tenant PIN-confirms; funds land via the normal Paybill path.`);
+    } catch (e) {
+      setBongaMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBongaBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -849,11 +931,27 @@ function MatchModalBody({ payment, tenants, tenantPick, setTenantPick, reason, s
           ))}
         </Select>
       </Field>
-      <div>
+      <div className="flex flex-wrap gap-2">
         <Button onClick={onMatch} disabled={busy || !tenantPick}>
           {busy ? "Matching…" : "Match & record payment"}
         </Button>
+        <Button variant="secondary" onClick={checkDaraja} disabled={statusBusy}>
+          {statusBusy ? "Verifying…" : "Verify at Daraja"}
+        </Button>
+        <Button variant="secondary" onClick={quoteBonga} disabled={bongaBusy}>
+          {bongaBusy ? "Quoting…" : "Quote Bonga points"}
+        </Button>
       </div>
+      {darajaStatus && <p className="text-xs text-slate-500">{darajaStatus}</p>}
+      {bonga && (
+        <div className="rounded-lg bg-slate-50 p-3 text-sm">
+          <p>Sender holds <strong>{bonga.points} pts</strong> (~{bonga.value_kes} KES).</p>
+          <Button size="sm" variant="secondary" className="mt-2" onClick={redeemBonga} disabled={bongaBusy || !tenantPick}>
+            Redeem toward {tenantPick ? "chosen tenant" : "…pick a tenant first"}
+          </Button>
+        </div>
+      )}
+      {bongaMsg && <p className="text-xs text-slate-600">{bongaMsg}</p>}
       <div className="border-t border-slate-100 pt-3">
         <Field label="Or reject (money stays with M-Pesa)">
           <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Test ping from Safaricom" />

@@ -138,7 +138,7 @@ First/Middle/LastName.
 code first.
 Kodi: `convex/c2b.ts`, routes `/c2b-validation`, `/c2b-confirmation`.
 
-### 2.3 Bill Manager — NOT INTEGRATED (recommended next)
+### 2.3 Bill Manager — LIVE IN KODI
 
 Safaricom-hosted e-invoicing + reminders + receipts.
 
@@ -157,43 +157,38 @@ Safaricom-hosted e-invoicing + reminders + receipts.
 4. You reconcile, then acknowledge → Safaricom sends the e-receipt.
 5. Cancel single/bulk while unpaid (409 once paid).
 
-Kodi fit: mirror each generated invoice into bulk-invoicing with
-`externalReference` = Convex invoice id; ingest the payment callback
-through the existing ledger; drop our own reminder SMS.
+Kodi: `convex/billManager.ts` (optIn/mirror/cancel/update), `/billmanager-callback` ingest → ledger, Settings → Bill Manager card.
 
-### 2.4 Dynamic QR — NOT INTEGRATED
+### 2.4 Dynamic QR — LIVE IN KODI
 
 `POST mpesa/qrcode/v1/generate`:
 `{MerchantName, RefNo, Amount, TrxCode: "PB", CPI: "<shortcode>", Size}`
 → `{QRCode: "<base64 png>"}`. Tenant scans with the M-Pesa app; no
-typing. Kodi fit: per-invoice QR (`PB`, shortcode, account code as
-RefNo, balance) on invoice/statement prints. Confirm RefNo surfaces as
-BillRefNumber before relying on it for matching.
+typing. Kodi: `convex/collect.ts` mintInvoiceQr (cached on invoiceQrs) + QR button on each invoice row.
 
-### 2.5 Lipa na Bonga — NOT INTEGRATED
+### 2.5 Lipa na Bonga — LIVE IN KODI
 
 Loyalty points at 0.2 KES/point. `calculate-points` then
 `redeem-paybill` (`v1/lipa/na/bonga/*`, own SHA256 user/pass auth),
 PIN-confirmed STK-style flow; funds land on the Paybill and the C2B
-callback fires on our registered URLs. Kodi fit: part-pay rent with
-points; confirmations reuse the C2B path.
+callback fires on our registered URLs. Kodi: `convex/bonga.ts` quote/redeem + review-queue Bonga buttons + Settings operator card.
 
-### 2.6 Ratiba (standing orders) — NOT INTEGRATED (needs contract)
+### 2.6 Ratiba (standing orders) — LIVE IN KODI (needs contract)
 
 Commercial API: `POST standingorder/v1/createStandingOrderExternal`.
 Tenant PIN-consents once; debits recur (Frequency 5 = Monthly).
 Account ref ≤ 12, names unique per customer (1050 on clash), masked
 MSISDN callbacks. Pricing ~5% capped 5 KES/execution + C2B tariffs.
-Kodi fit: rent autopay with mandate tracking (create/amend/cancel).
+Kodi: `convex/ratiba.ts` mandate tracking (create/amend/cancel/confirm) + tenant-page Mandates card.
 
-### 2.7 C2B Hakikisha — NOT INTEGRATED (needs onboarding)
+### 2.7 C2B Hakikisha — HOST LIVE IN KODI (needs onboarding)
 
 Reversed direction: **Safaricom calls you**.
 `POST c2b_hakikisha/v1/notify` → you return `{accountName}` for
 `{accountNumber, shortcode}`; the payer sees the name pre-confirm on
 STK/USSD/app. Requires apisupport onboarding + reciprocal B2C
 Hakikisha contract + you hosting token and notify endpoints.
-Kodi fit: return tenant names for account codes → typos die at source.
+Kodi: `/hakikisha-token` + `/hakikisha-notify` host (`convex/hakikishaInternal.ts`) returning tenant names.
 
 ---
 
@@ -202,7 +197,7 @@ Kodi fit: return tenant names for account codes → typos die at source.
 All async with ResultURL/QueueTimeOutURL callbacks. Limits ~10–250k per
 transaction unless noted.
 
-### 3.1 B2C v3 — NOT INTEGRATED (deposit refunds)
+### 3.1 B2C v3 — LIVE IN KODI (deposit refunds)
 
 `POST mpesa/b2c/v3/paymentrequest`. Requires Bulk/One-account shortcode.
 `OriginatorConversationID` dedupes double disbursement (reuse the
@@ -210,98 +205,94 @@ pattern). BusinessPayment/SalaryPayment/PromotionPayment. Callback
 reveals receiver name + balances. Status-queryable. No passkey; credential
 reusable. Fund Utility from MMF first. **B2C reversals API-unsupported —
 portal only.**
-Kodi fit: in-app deposit refunds to tenant wallets.
+Kodi: `convex/payouts.ts` payB2cRefund (settlement link + Hakikisha pre-flight checkbox) + Reports → Payouts card.
 
-### 3.2 B2C Account Top Up — NOT INTEGRATED (float funding)
+### 3.2 B2C Account Top Up — LIVE IN KODI (float funding)
 
 `b2b/v1/paymentrequest`, CommandID `BusinessPayToBulk`: MMF → B2C
-utility. Role: Org Business Pay to Bulk initiator. The prerequisite that
-keeps B2C refunds funded.
+utility. Kodi: `convex/payouts.ts` topUpFloat + Reports → Payouts card.
 
-### 3.3 Business To Pochi — NOT INTEGRATED (niche)
+### 3.3 Business To Pochi — LIVE IN KODI (niche)
 
 `b2pochi/v1/paymentrequest`, `BusinessPayToPochi` to micro-SME wallets.
-Only if refunds go to Pochi wallets.
+Kodi: `convex/payouts.ts` payToPochi (owner action).
 
-### 3.4 Business Pay Bill / Buy Goods — NOT INTEGRATED (ops)
+### 3.4 Business Pay Bill / Buy Goods — LIVE IN KODI (ops)
 
 `b2b/v1/paymentrequest`, `BusinessPayBill` / `BusinessBuyGoods`:
 MMF → utility/merchant, optional `Requester` (pay on someone's behalf),
-account ref ≤ 13. Kodi fit: automate MMF→Utility funding, supplier
-payments.
+account ref ≤ 13. Kodi: `convex/payouts.ts` payBusinessBill (PayBill/BuyGoods/MMF→Utility) — owner action.
 
-### 3.5 B2B Express Checkout — NOT INTEGRATED (skip)
+### 3.5 B2B Express Checkout — LIVE IN KODI (ops completeness)
 
 `v1/ussdpush/get-msisdn`: USSD push to till operators (operator ID+PIN).
-Merchant till→paybill only. No tenant use.
+Merchant till→paybill only. Kodi: `convex/payouts.ts` expressCheckoutPush (owner action, PIN never stored).
 
-### 3.6 Tax Remittance — NOT INTEGRATED (later)
+### 3.6 Tax Remittance — LIVE IN KODI
 
 `b2b/v1/remittax`, `PayTaxToKRA`, fixed PartyB 572572, ref = KRA PRN
-(requires prior KRA integration). Rental-income tax from Kodi later.
+(requires prior KRA integration). Kodi: `convex/payouts.ts` remitTax (owner action, fixed PartyB 572572).
 
-### 3.7 B2C Hakikisha — NOT INTEGRATED (pairs with B2C)
+### 3.7 B2C Hakikisha — LIVE IN KODI (pairs with B2C)
 
 We call `b2c/hakikisha/v1/hakikisha` (MSISDN+shortcode) → first name +
-masked rest. Pre-flight before every deposit refund. Reciprocal contract
-with C2B Hakikisha.
+masked rest. Kodi: `convex/payouts.ts` hakikishaB2c — runs automatically before every B2C refund in the settle modal.
 
 ---
 
 ## 4. Verify, reconcile, know-your-customer
 
-### 4.1 Transaction Status v1 — PARTIAL (risk-review placeholder)
+### 4.1 Transaction Status v1 — LIVE IN KODI
 
 `POST mpesa/transactionstatus/v1/query`: receipt OR
 OriginatorConversationID + PartyA + initiator credential. Covers
 C2B/B2B/B2C/IMT/Reversal. Async with ResultURL. Tiers: Initiated →
 Authorized → Completed/Cancelled/Declined/Expired.
-Kodi fit: genuine TransID verification for queued hits once the
-initiator-cert flow is done.
+Kodi: `convex/verify.ts` queryTransactionStatus + review-queue Verify-at-Daraja button + job history.
 
-### 4.2 Account Balance v1 — NOT INTEGRATED
+### 4.2 Account Balance v1 — LIVE IN KODI
 
 `POST mpesa/accountbalance/v1/query` (initiator credential), async
 ResultURL callback (**no retries** — poll status on silence). Response
 is pipe-delimited per-account balances. Own-shortcode-only, schedulable.
-Kodi fit: nightly M-Pesa-vs-ledger diff.
+Kodi: `convex/verify.ts` queryAccountBalance + latestBalance + Reports → Payouts card.
 
-### 4.3 Pull Transactions — NOT INTEGRATED (safety net)
+### 4.3 Pull Transactions — LIVE IN KODI (safety net)
 
 One-time `pulltransactions/v1/register`, then query 48h windows with
 offset pagination (C2B only). **Pull rows carry FULL numeric MSISDN** —
 the authoritative phone source for reconciling masked v2 hits.
-Kodi fit: nightly pull-and-diff catching webhook misses.
+Kodi: `convex/verify.ts` registerPull + pullC2bWindow (auto-ingest → ledger) + due-org selectors.
 
-### 4.4 Reversals v1 — INBOUND HANDLED, outbound NOT INTEGRATED
+### 4.4 Reversals v1 — LIVE IN KODI (inbound + outbound)
 
 `POST mpesa/reversal/v1/request`: C2B-only, receipt as TransactionID,
 ReceiverParty + id 11. R000001 already-reversed / R000002 invalid
 receipt. Needs Org Reversals Initiator. B2C outbound reversals
 unsupported (portal only).
-Kodi fit: staff-initiated reversals from the receipt page.
+Kodi: `convex/payouts.ts` reverseDarajaPayment + receipt Reverse-at-Daraja button; completion auto-voids.
 
-### 4.5 Mobile Number Validation (KYC) — NOT INTEGRATED
+### 4.5 Mobile Number Validation (KYC) — LIVE IN KODI
 
 `POST v1/KYC-validation/validateID`: phone + idType
 (01 NationalID / 02 Military / 05 Passport) + idNumber → TRUE/FALSE,
 no PII. Commercial ~4.5 KES tapering. Needs apisupport onboarding.
-Kodi fit: authoritative check behind the national-ID fallback.
+Kodi: `convex/fraud.ts` validateTenantId + tenant-page KYC card (cached).
 
-### 4.6 SIM Swap / IMSI / Age on Network — NOT INTEGRATED (fraud trio)
+### 4.6 SIM Swap / IMSI / Age on Network — LIVE IN KODI (fraud trio)
 
 - Swap `imsi/v2/checkATI`: last swap date (>3mo → 1900-01-01). 50k KES
   connection, 200k free, 1 KES/req.
 - IMSI V1/V2/V3: hashed IMSI + age + swap bundles. 20 KES/call.
 - Age `registration/lookup/v1/checkATI`: SIM registration date,
   ~4 KES tapering, failed calls unbilled.
-Kodi fit: recent-swap / new-SIM signals in the risk engine.
+Kodi: `convex/fraud.ts` checkSimSwap/checkSimAge/checkImsi + tenant-page KYC card (cached).
 
-### 4.7 B2B Hakikisha (QueryOrgInfo) — NOT INTEGRATED (setup guard)
+### 4.7 B2B Hakikisha (QueryOrgInfo) — LIVE IN KODI (setup guard)
 
 `POST sfcverify/v1/query/info`: shortcode + type 4/2 → org name +
 charge profile, sync, OAuth only. Tariffs: Mgao split vs Bouquet variants.
-Kodi fit: "shortcode belongs to X on tariff Y" at Settings setup.
+Kodi: `convex/collect.ts` verifyShortcodeOwner + Settings → Smart collections card.
 
 ---
 

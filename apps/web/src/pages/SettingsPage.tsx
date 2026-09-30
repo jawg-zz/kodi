@@ -10,19 +10,37 @@ import {
   demoStatus,
   exportOrgBackup,
   generateInvoices,
+  getBillManagerState,
   getC2bStatus,
+  getInitiatorStatus,
   getMpesaCreds,
   inviteUser,
+  listDarajaJobs,
   listPayments,
   listStaff,
   listTenants,
+  mirrorInvoicesToBillManager,
+  optInBillManager,
+  pullC2bWindow,
+  queryAccountBalance,
+  queryTransactionStatus,
   recordManualPayment,
   registerC2bUrls,
+  registerPull,
+  saveBongaCreds,
+  saveInitiatorCreds,
   saveMpesaCreds,
+  setValidationMode,
   simulateC2b,
   updateOrg,
+  verifyShortcodeOwner,
   type MpesaCredsView,
 } from "../lib/api";
+import type {
+  BillManagerState,
+  DarajaJob,
+  InitiatorStatusView,
+} from "../lib/types";
 import { Money } from "../components/domain";
 import { Button } from "../components/Button";
 import { Field, Input, Select } from "../components/Field";
@@ -55,6 +73,11 @@ export function SettingsPage() {
       <PlanSection />
       <StaffSection staff={staff} isOwner={membership?.role === "owner"} />
       <DarajaSection />
+      <InitiatorSection />
+      <VerifySection />
+      <BillManagerSection />
+      <SmartCollectSection />
+      <BongaSection />
       <DataSection />
     </div>
   );
@@ -400,7 +423,56 @@ function C2bSection() {
           {busy ? "Registering…" : status.registered ? "Re-register Paybill URLs" : "Register Paybill URLs"}
         </Button>
       </div>
+      <ValidationModeRow />
       <SimulatorSection />
+    </div>
+  );
+}
+
+/**
+ * Validation strictness: accept-all (money-safe default — typos park in
+ * review) vs strict (unknown account numbers bounce at the handset with
+ * the reason). Needs Safaricom-side validation activation via apisupport.
+ */
+function ValidationModeRow() {
+  const { org } = useAuth();
+  const [mode, setMode] = useState<"accept_all" | "strict">("accept_all");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!org) return null;
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      await setValidationMode(org.id, mode);
+      setMsg(mode === "strict"
+        ? "Strict validation on — unknown account numbers bounce at the phone with the reason."
+        : "Accept-all on — every structural hit forwards to confirmation and matching.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 max-w-lg rounded-lg border border-slate-200 p-3">
+      <p className="text-sm font-medium">Paybill validation at the handset</p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Select value={mode} onChange={(e) => setMode(e.target.value as "accept_all" | "strict")} className="max-w-64">
+          <option value="accept_all">Accept all (typos park in review)</option>
+          <option value="strict">Strict (bounce unknown accounts)</option>
+        </Select>
+        <Button variant="secondary" size="sm" onClick={save} disabled={busy}>
+          {busy ? "Saving…" : "Apply"}
+        </Button>
+      </div>
+      {error && <div className="mt-2"><ErrorBanner message={error} /></div>}
+      {msg && <p className="mt-2 text-sm text-green-700">{msg}</p>}
     </div>
   );
 }
@@ -505,6 +577,379 @@ function SimulatorSection() {
         <div><Button type="submit" variant="secondary" disabled={busy}>{busy ? "Simulating…" : "Simulate payment"}</Button></div>
       </form>
     </div>
+  );
+}
+
+/**
+ * Initiator operator (SecurityCredential): unlocks Transaction Status,
+ * Balance, Reversals, B2C/B2B, Tax. Owner pastes the org-portal API
+ * operator name + password + X.509 cert PEM; the cert parses before
+ * storage so a bad paste fails fast.
+ */
+function InitiatorSection() {
+  const [status, setStatus] = useState<InitiatorStatusView | null>(null);
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [cert, setCert] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => {
+    getInitiatorStatus()
+      .then(setStatus)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
+
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !password || !cert.trim()) {
+      setError("Initiator name, password and certificate PEM are all required.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const r = await saveInitiatorCreds({
+        initiatorName: name.trim(),
+        initiatorPassword: password,
+        initiatorCertPem: cert.trim(),
+      });
+      setName("");
+      setPassword("");
+      setCert("");
+      setMsg(`Initiator saved — cert ${r.cert_subject} (valid to ${r.cert_valid_to.slice(0, 10)}, ${r.cert_key_bits}-bit).`);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardBody>
+        <h2 className="mb-1 font-semibold">Initiator & payouts</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          {status?.configured
+            ? <>Operator <strong>{status.initiator_name}</strong> · cert {status.cert_subject ?? "—"}{" "}
+              {status.cert_expired ? <Badge tone="red">cert expired</Badge> : <Badge tone="green">cert ok</Badge>}</>
+            : <>Not set — verification, reversals, refunds and balance checks stay disabled. <Badge tone="amber">optional</Badge></>}
+        </p>
+        <form onSubmit={save} className="grid max-w-lg gap-3">
+          <Field label="Initiator name" required hint="API operator created by the Business Admin on org.ke.m-pesa.com">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="apiop1" />
+          </Field>
+          <Field label="Initiator password" required hint="Set by the Business Manager; avoid @ and . (M-Pesa rejects them)">
+            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </Field>
+          <Field label="X.509 certificate PEM" required hint="M-Pesa public cert from the Daraja portal (Sandbox cert for sandbox)">
+            <textarea
+              className="min-h-28 w-full rounded-lg border border-slate-200 p-2 font-mono text-xs"
+              value={cert}
+              onChange={(e) => setCert(e.target.value)}
+              placeholder="-----BEGIN CERTIFICATE----- …"
+            />
+          </Field>
+          {error && <ErrorBanner message={error} />}
+          {msg && <p className="text-sm text-green-700">{msg}</p>}
+          <div><Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save initiator"}</Button></div>
+        </form>
+      </CardBody>
+    </Card>
+  );
+}
+
+/**
+ * Verification & reconciliation: Transaction Status lookups, Account
+ * Balance snapshots, Pull registration + 48h windows, job history.
+ */
+function VerifySection() {
+  const { org } = useAuth();
+  const [jobs, setJobs] = useState<DarajaJob[]>([]);
+  const [lookup, setLookup] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => {
+    if (!org) return;
+    listDarajaJobs(org.id).then(setJobs).catch(() => setJobs([]));
+  };
+
+  useEffect(() => { load(); }, [org?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const run = async (label: string, fn: () => Promise<unknown>) => {
+    setBusy(label);
+    setError(null);
+    setMsg(null);
+    try {
+      await fn();
+      setMsg(`${label} accepted — the result lands on the job row below.`);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!org) return null;
+
+  return (
+    <Card>
+      <CardBody>
+        <h2 className="mb-1 font-semibold">Verification & reconciliation</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          Needs the initiator above. Status checks verify queued receipts; balance diffs catch diversion;
+          pull windows heal webhook misses with full phone numbers.
+        </p>
+        <div className="flex max-w-lg flex-wrap gap-2">
+          <Input
+            value={lookup}
+            onChange={(e) => setLookup(e.target.value)}
+            placeholder="Receipt / TransID to verify"
+            className="max-w-56"
+          />
+          <Button
+            variant="secondary"
+            disabled={busy !== null || !lookup.trim()}
+            onClick={() => run("Status check", () => queryTransactionStatus({ orgId: org.id, transactionId: lookup.trim() }))}
+          >
+            {busy === "Status check" ? "Asking…" : "Verify receipt"}
+          </Button>
+          <Button variant="secondary" disabled={busy !== null} onClick={() => run("Balance query", () => queryAccountBalance(org.id))}>
+            {busy === "Balance query" ? "Asking…" : "Check balance"}
+          </Button>
+          <Button variant="secondary" disabled={busy !== null} onClick={() => run("Pull register", () => registerPull(org.id))}>
+            {busy === "Pull register" ? "Registering…" : "Register pull"}
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={busy !== null}
+            onClick={() => run("Pull 48h", async () => {
+              const r = await pullC2bWindow({ orgId: org.id });
+              setMsg(`Pulled ${r.pulled} rows — ${r.ingested} new (${r.matched} matched, ${r.queued} queued).`);
+            })}
+          >
+            {busy === "Pull 48h" ? "Pulling…" : "Pull last 48h"}
+          </Button>
+        </div>
+        {error && <div className="mt-2 max-w-lg"><ErrorBanner message={error} /></div>}
+        {msg && <p className="mt-2 text-sm text-green-700">{msg}</p>}
+        {jobs.length > 0 && (
+          <ul className="mt-3 divide-y divide-slate-100 text-sm">
+            {jobs.slice(0, 15).map((j) => (
+              <li key={j.id} className="flex items-center justify-between gap-2 py-1.5">
+                <span className="truncate">
+                  <Badge tone={j.status === "done" ? "green" : j.status === "failed" ? "red" : "amber"}>{j.status}</Badge>{" "}
+                  <span className="ml-1 font-mono text-xs text-slate-500">{j.kind}</span>{" "}
+                  <span className="text-slate-600">{j.request_summary ?? j.conversation_id}</span>
+                </span>
+                <span className="shrink-0 text-xs text-slate-400" title={j.result_desc ?? undefined}>
+                  {(j.result_desc ?? "").slice(0, 60)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+/** Bill Manager: opt-in, mirror, cancel state. */
+function BillManagerSection() {
+  const { org } = useAuth();
+  const [state, setState] = useState<BillManagerState | null>(null);
+  const [email, setEmail] = useState("");
+  const [contact, setContact] = useState("");
+  const [reminders, setReminders] = useState(true);
+  const [month, setMonth] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => {
+    if (!org) return;
+    getBillManagerState(org.id).then(setState).catch(() => setState(null));
+  };
+
+  useEffect(() => { load(); }, [org?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!org) return null;
+
+  const optIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy("optin");
+    setError(null);
+    setMsg(null);
+    try {
+      await optInBillManager({ orgId: org.id, email: email.trim(), officialContact: contact.trim(), sendReminders: reminders });
+      setMsg("Opted in — Safaricom now accepts invoices for this shortcode.");
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const mirror = async () => {
+    setBusy("mirror");
+    setError(null);
+    setMsg(null);
+    try {
+      const r = await mirrorInvoicesToBillManager({ orgId: org.id, month: month.trim() || undefined });
+      setMsg(`Mirrored ${r.mirrored} invoices${r.failed > 0 ? `, ${r.failed} rejected — see webhook log` : ""}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Card>
+      <CardBody>
+        <h2 className="mb-1 font-semibold">Bill Manager (Safaricom e-invoicing)</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          {state?.opted_in
+            ? <>Opted in{state.email ? ` · ${state.email}` : ""}{state.last_mirrored_at ? ` · last mirror ${state.last_mirrored_at.slice(0, 10)}` : ""} <Badge tone="green">live</Badge></>
+            : <>Outsources invoice SMS, 7/3/0-day reminders and e-receipts to Safaricom. <Badge tone="amber">not opted in</Badge></>}
+        </p>
+        {!state?.opted_in ? (
+          <form onSubmit={optIn} className="grid max-w-lg gap-3">
+            <Field label="Notification email" required><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></Field>
+            <Field label="Official contact" required><Input value={contact} onChange={(e) => setContact(e.target.value)} placeholder="0712 345 678" required /></Field>
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input type="checkbox" checked={reminders} onChange={(e) => setReminders(e.target.checked)} />
+              Safaricom sends 7/3/0-day SMS reminders
+            </label>
+            {error && <ErrorBanner message={error} />}
+            {msg && <p className="text-sm text-green-700">{msg}</p>}
+            <div><Button type="submit" disabled={busy !== null}>{busy === "optin" ? "Opting in…" : "Opt in"}</Button></div>
+          </form>
+        ) : (
+          <div className="grid max-w-lg gap-3">
+            <div className="flex flex-wrap items-end gap-2">
+              <Field label="Month (blank = all unpaid)">
+                <Input value={month} onChange={(e) => setMonth(e.target.value)} placeholder="2026-09" className="max-w-40" />
+              </Field>
+              <Button variant="secondary" onClick={mirror} disabled={busy !== null}>
+                {busy === "mirror" ? "Mirroring…" : "Mirror invoices"}
+              </Button>
+            </div>
+            {error && <ErrorBanner message={error} />}
+            {msg && <p className="text-sm text-green-700">{msg}</p>}
+            <p className="text-xs text-slate-400">
+              Payments arrive on the Bill Manager callback with the full phone number and reconcile like Paybill hits.
+              Cancel a mirrored invoice from the invoice row while unpaid.
+            </p>
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+/** Dynamic QR + shortcode guard: typo killers for invoices and setup. */
+function SmartCollectSection() {
+  const { org } = useAuth();
+  const [shortcode, setShortcode] = useState("");
+  const [check, setCheck] = useState<{ org_name?: string | null; tariff?: string | null } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!org) return null;
+
+  const verify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setCheck(null);
+    try {
+      const r = await verifyShortcodeOwner({ orgId: org.id, shortcode: shortcode.trim() || undefined });
+      setCheck({ org_name: r.org_name, tariff: r.tariff });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardBody>
+        <h2 className="mb-1 font-semibold">Smart collections</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          Per-invoice QR codes print from the invoice page. Below: verify a shortcode belongs to your org before money moves.
+        </p>
+        <form onSubmit={verify} className="flex max-w-lg flex-wrap items-end gap-2">
+          <Field label="Shortcode to verify">
+            <Input value={shortcode} onChange={(e) => setShortcode(e.target.value)} placeholder="615395" className="max-w-40" />
+          </Field>
+          <Button variant="secondary" type="submit" disabled={busy}>{busy ? "Checking…" : "Verify owner"}</Button>
+        </form>
+        {error && <div className="mt-2 max-w-lg"><ErrorBanner message={error} /></div>}
+        {check && (
+          <p className="mt-2 text-sm text-slate-600">
+            Owner: <strong>{check.org_name ?? "unknown"}</strong> · tariff {check.tariff ?? "unknown"}
+          </p>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+/** Lipa na Bonga operator creds (separate SHA256 user/pass scheme). */
+function BongaSection() {
+  const { org } = useAuth();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!org) return null;
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      await saveBongaCreds({ orgId: org.id, username: username.trim(), password });
+      setUsername("");
+      setPassword("");
+      setMsg("Bonga operator saved — quote points from the Payments page.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardBody>
+        <h2 className="mb-1 font-semibold">Lipa na Bonga (points part-payments)</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          Tenants part-pay rent with loyalty points (0.2 KES each). Funds land on the Paybill and record via the normal path.
+        </p>
+        <form onSubmit={save} className="grid max-w-lg gap-3">
+          <Field label="Bonga username" required><Input value={username} onChange={(e) => setUsername(e.target.value)} /></Field>
+          <Field label="Bonga password" required><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+          {error && <ErrorBanner message={error} />}
+          {msg && <p className="text-sm text-green-700">{msg}</p>}
+          <div><Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save Bonga operator"}</Button></div>
+        </form>
+      </CardBody>
+    </Card>
   );
 }
 

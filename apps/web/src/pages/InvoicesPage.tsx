@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { addMonths, currentMonthKey, monthLabel } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
-import { generateInvoices, listInvoices, listTenants, updateInvoice } from "../lib/api";
-import type { InvoiceWithRefs, Tenant } from "../lib/types";
+import { generateInvoices, getInvoiceQr, listInvoices, listTenants, mintInvoiceQr, updateInvoice } from "../lib/api";
+import type { InvoiceQr, InvoiceWithRefs, Tenant } from "../lib/types";
 import { Button } from "../components/Button";
 import { Field, Input, Select } from "../components/Field";
 import { Card, EmptyState, ErrorBanner, Loading, PageHeader } from "../components/ui";
@@ -161,6 +161,7 @@ export function InvoicesPage() {
                             <button onClick={() => setEditing(i)} className="text-xs font-medium text-brand-600 hover:underline">
                               Edit
                             </button>
+                            <QrButton invoiceId={i.id} />
                           </>
                         )}
                         <Link to={`/print/invoice/${i.id}`} target="_blank" rel="noreferrer" className="text-xs font-medium text-brand-600 hover:underline">
@@ -309,5 +310,55 @@ export function EditInvoiceModal({ invoice, tenantName, onClose, onSaved }: {
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** Per-invoice Dynamic QR: tenant scans with the M-Pesa app, no typing. */
+function QrButton({ invoiceId }: { invoiceId: string }) {
+  const [qr, setQr] = useState<InvoiceQr | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const show = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const cached = await getInvoiceQr(invoiceId).catch(() => null);
+      if (cached) {
+        setQr(cached);
+      } else {
+        setQr(await mintInvoiceQr(invoiceId));
+      }
+      setOpen(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button onClick={show} className="text-xs font-medium text-brand-600 hover:underline" title={error ?? undefined}>
+        {busy ? "QR…" : "QR"}
+      </button>
+      {open && qr && (
+        <Modal title={`Pay ${qr.ref_no} — ${qr.amount.toLocaleString("en-US")} KES`} onClose={() => setOpen(false)}>
+          <div className="space-y-3 text-center">
+            <img
+              src={`data:image/png;base64,${qr.qr_base64}`}
+              alt={`M-Pesa QR for ${qr.ref_no}`}
+              className="mx-auto h-64 w-64 rounded-lg border border-slate-200"
+            />
+            <p className="text-sm text-slate-600">
+              Scan with the M-Pesa app — Paybill with account <strong>{qr.ref_no}</strong> for{" "}
+              <strong>{qr.amount.toLocaleString("en-US")} KES</strong>.
+            </p>
+            <div><Button variant="secondary" onClick={() => setOpen(false)}>Close</Button></div>
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
