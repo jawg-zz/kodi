@@ -116,7 +116,7 @@ Purpose: what each API does, exact versions/paths observed, and Kodi relevance.
 
 ## 5. Cross-cutting integration notes (from docs)
 - Endpoint families observed: oauth/v1, stkpush/v1, stkpushquery/v1, c2b/v2, b2c/v3, b2b/v1, b2pochi/v1, qrcode/v1, sfcverify/v1, imsi/v2, registration/lookup/v1, KYC-validation/v1, lipa/na/bonga/v1, dynamic-offers/v1+v2, ussdpush/v1, standingorder/v1, billmanager-invoice/v1, pulltransactions/v1, accountbalance/v1, transactionstatus/v1, reversal/v1, remittax (b2b/v1), c2b_hakikisha/v1, b2c/hakikisha/v1, simportal/*.
-- New OAuth token invalidates previous → cache with expiry (Kodi currently mints per call — fix).
+- New OAuth token invalidates previous → cached per org on the mpesaCredentials row (lib/daraja.ts + get/storeCachedDarajaToken), reused with a 2-minute skew margin.
 - STK limits 250k/txn; "lock subscriber" → 1-min throttle on repeat pushes.
 - AccountReference ≤12 (STK) / ≤13 (B2B) / ≤20 (C2B BillRef).
 - Production C2B registration one-time; changes via portal URL Management (2 operators) or apisupport.

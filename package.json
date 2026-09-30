@@ -10,8 +10,8 @@
     "dev": "npm run dev -w apps/web",
     "build": "npm run build -w apps/web",
     "typecheck": "npm run typecheck -w apps/web",
-    "test": "npm run test -w packages/shared && npx vitest run convex/reports.test.ts convex/payments.test.ts convex/c2b.test.ts convex/demo.test.ts --root .",
-    "test:convex": "npx vitest run convex/reports.test.ts convex/payments.test.ts convex/c2b.test.ts convex/demo.test.ts --root ."
+    "test": "npm run test -w packages/shared && npx vitest run convex/reports.test.ts convex/payments.test.ts convex/c2b.test.ts convex/demo.test.ts convex/daraja.test.ts --root .",
+    "test:convex": "npx vitest run convex/reports.test.ts convex/payments.test.ts convex/c2b.test.ts convex/demo.test.ts convex/daraja.test.ts --root ."
   },
   "devDependencies": {
     "convex": "^1.46.0",

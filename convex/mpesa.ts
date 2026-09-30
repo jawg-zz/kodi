@@ -11,11 +11,9 @@ import {
   siteBaseUrl,
   stkPassword,
 } from "./lib/auth";
+import { cachedDarajaToken, darajaBase } from "./lib/daraja";
 import { encryptSecret } from "./lib/mpesaCrypto";
 import { txShape } from "./mpesaInternal";
-
-const SANDBOX = "https://sandbox.safaricom.co.ke";
-const PROD = "https://api.safaricom.co.ke";
 
 /** process.env in actions (Node runtime). Declared locally to avoid @types/node. */
 declare const process: { env: Record<string, string | undefined> };
@@ -124,32 +122,8 @@ export const saveMpesaCreds = action({
 });
 
 // ---------------------------------------------------------------------------
-// Daraja helpers (actions only — mutations cannot fetch)
+// Local Daraja helpers (token itself lives in lib/daraja, cached per org)
 // ---------------------------------------------------------------------------
-
-async function darajaToken(
-  base: string,
-  key: string,
-  secret: string,
-): Promise<string> {
-  const res = await fetch(
-    `${base}/oauth/v1/generate?grant_type=client_credentials`,
-    {
-      headers: { Authorization: "Basic " + btoa(`${key}:${secret}`) },
-      signal: AbortSignal.timeout(20_000),
-    },
-  );
-  if (!res.ok) {
-    throw new ConvexError(
-      `Daraja OAuth failed (${res.status}) — check consumer key/secret`,
-    );
-  }
-  const data = (await res.json()) as { access_token?: string };
-  if (!data.access_token) {
-    throw new ConvexError("Daraja did not return an access token");
-  }
-  return data.access_token;
-}
 
 type ActionCaller = {
   userId: string;
@@ -250,12 +224,8 @@ export const stkInitiate = action({
       );
     }
     const callbackUrl = `${siteBase}/stk-callback`;
-    const base = creds.environment === "production" ? PROD : SANDBOX;
-    const token = await darajaToken(
-      base,
-      creds.consumerKey,
-      creds.consumerSecret,
-    );
+    const base = darajaBase(creds.environment);
+    const token = await cachedDarajaToken(ctx, caller.orgId, creds);
     const timestamp = darajaTimestamp();
     const stkRes = await fetch(`${base}/mpesa/stkpush/v1/processrequest`, {
       method: "POST",
@@ -339,12 +309,8 @@ export const stkStatus = action({
     );
     if (creds === null) return fresh;
     try {
-      const base = creds.environment === "production" ? PROD : SANDBOX;
-      const token = await darajaToken(
-        base,
-        creds.consumerKey,
-        creds.consumerSecret,
-      );
+      const base = darajaBase(creds.environment);
+      const token = await cachedDarajaToken(ctx, caller.orgId, creds);
       const timestamp = darajaTimestamp();
       const q = await fetch(`${base}/mpesa/stkpushquery/v1/query`, {
         method: "POST",

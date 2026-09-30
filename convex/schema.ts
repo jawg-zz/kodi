@@ -273,6 +273,15 @@ export default defineSchema({
     shortcode: v.string(),
     passkeyEnc: v.string(),
     /**
+     * Cached Daraja OAuth token (AES-GCM encrypted, same key as the creds).
+     * Daraja invalidates the previous token on every mint, so all actions
+     * share this one row instead of minting per call. Tokens live 3600s;
+     * readers treat the token as stale TOKEN_SKEW_MS early (see lib/daraja).
+     */
+    darajaTokenEnc: v.optional(v.string()),
+    /** ms epoch when the cached token expires (Daraja `expires_in`). */
+    darajaTokenExpiresAt: v.optional(v.number()),
+    /**
      * C2B (Paybill) wiring. registerUrls must succeed before Safaricom
      * delivers validation/confirmation hits to /c2b-*.
      */

@@ -10,13 +10,11 @@ import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { assertOrgMember, assertStaff, audit, normalizePhone, siteBaseUrl } from "./lib/auth";
+import { cachedDarajaToken, darajaBase } from "./lib/daraja";
 import { recordPaymentCore, reversePaymentInTx } from "./lib/ledger";
 
 /** process.env in actions (Node runtime). Declared locally to avoid @types/node. */
 declare const process: { env: Record<string, string | undefined> };
-
-const SANDBOX = "https://sandbox.safaricom.co.ke";
-const PROD = "https://api.safaricom.co.ke";
 
 const c2bStatus = v.union(
   v.literal("pending_review"),
@@ -1059,25 +1057,10 @@ export const registerC2bUrls = action({
         "Set MPESA_CALLBACK_URL env var to your Convex site URL first.",
       );
     }
-    const base = creds.environment === "production" ? PROD : SANDBOX;
-    const tokenRes = await fetch(
-      `${base}/oauth/v1/generate?grant_type=client_credentials`,
-      {
-        headers: {
-          Authorization: "Basic " + btoa(`${creds.consumerKey}:${creds.consumerSecret}`),
-        },
-        signal: AbortSignal.timeout(20_000),
-      },
-    );
-    if (!tokenRes.ok) {
-      throw new ConvexError(
-        `Daraja OAuth failed (${tokenRes.status}) — check consumer key/secret`,
-      );
-    }
-    const tokenData = (await tokenRes.json()) as { access_token?: string };
-    if (!tokenData.access_token) {
-      throw new ConvexError("Daraja did not return an access token");
-    }
+    const base = darajaBase(creds.environment);
+    // Shared per-org token cache (Daraja kills the previous token on every
+    // mint — never mint inline here or parallel STK calls die with 404s).
+    const token = await cachedDarajaToken(ctx, caller.orgId, creds);
     const confirmUrl = `${siteBase}/c2b-confirmation`;
     const validUrl = `${siteBase}/c2b-validation`;
     // C2B v2 (current per Daraja 3.0 docs): payloads carry a masked MSISDN
@@ -1085,7 +1068,7 @@ export const registerC2bUrls = action({
     const regRes = await fetch(`${base}/mpesa/c2b/v2/registerurl`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${tokenData.access_token}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       signal: AbortSignal.timeout(30_000),

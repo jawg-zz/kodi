@@ -1,6 +1,6 @@
 import { ConvexError, v } from "convex/values";
-import { internalMutation } from "./_generated/server";
-import { decryptSecret } from "./lib/mpesaCrypto";
+import { internalMutation, internalQuery } from "./_generated/server";
+import { decryptSecret, encryptSecret } from "./lib/mpesaCrypto";
 import { recordPaymentCore } from "./lib/ledger";
 
 /**
@@ -223,8 +223,63 @@ export const storeCreds = internalMutation({
   },
 });
 
-/** 30-minute sweep of stale pendings (cron + every stk-status poll). */
-export const expirePending = internalMutation({
+/**
+ * Token cache backing (see lib/daraja.ts): read the decrypted cached
+ * token, or null when no fresh-enough value exists. Encryption matches
+ * the credential blobs (AES-GCM via CREDENTIALS_KEY).
+ */
+export const getCachedDarajaToken = internalQuery({
+  args: { orgId: v.id("orgs") },
+  returns: v.union(
+    v.object({ token: v.string(), expiresAt: v.number() }),
+    v.null(),
+  ),
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("mpesaCredentials")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .first();
+    if (
+      row === null ||
+      row.darajaTokenEnc === undefined ||
+      row.darajaTokenExpiresAt === undefined
+    ) {
+      return null;
+    }
+    try {
+      const token = await decryptSecret(row.darajaTokenEnc);
+      if (!token) return null;
+      return { token, expiresAt: row.darajaTokenExpiresAt };
+    } catch {
+      // Re-keyed CREDENTIALS_KEY or corrupt blob: fail open so the caller
+      // mints a fresh token and re-stores under the current key.
+      return null;
+    }
+  },
+});
+
+export const storeCachedDarajaToken = internalMutation({
+  args: {
+    orgId: v.id("orgs"),
+    token: v.string(),
+    expiresAt: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("mpesaCredentials")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .first();
+    if (row === null) return null;
+    await ctx.db.patch(row._id, {
+      darajaTokenEnc: await encryptSecret(args.token),
+      darajaTokenExpiresAt: args.expiresAt,
+    });
+    return null;
+  },
+});
+
+/** 30-minute sweep of stale pendings (cron + every stk-status poll). */export const expirePending = internalMutation({
   args: {},
   returns: v.number(),
   handler: async (ctx) => {
