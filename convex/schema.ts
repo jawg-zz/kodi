@@ -274,7 +274,7 @@ export default defineSchema({
     passkeyEnc: v.string(),
     /**
      * C2B (Paybill) wiring. registerUrls must succeed before Safaricom
-     * delivers validation/confirmation hits to /mpesa-c2b-*.
+     * delivers validation/confirmation hits to /c2b-*.
      */
     c2bRegistered: v.optional(v.boolean()),
     c2bRegisteredAt: v.optional(v.number()),

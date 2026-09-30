@@ -8,8 +8,8 @@
  * @module
  */
 
-import type * as crons from "../crons.js";
 import type * as c2b from "../c2b.js";
+import type * as crons from "../crons.js";
 import type * as demo from "../demo.js";
 import type * as export_ from "../export.js";
 import type * as helpers from "../helpers.js";
@@ -18,6 +18,8 @@ import type * as invites from "../invites.js";
 import type * as invitesInternal from "../invitesInternal.js";
 import type * as invoices from "../invoices.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_credit from "../lib/credit.js";
+import type * as lib_ledger from "../lib/ledger.js";
 import type * as lib_mpesaCrypto from "../lib/mpesaCrypto.js";
 import type * as mpesa from "../mpesa.js";
 import type * as mpesaInternal from "../mpesaInternal.js";
@@ -35,8 +37,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  crons: typeof crons;
   c2b: typeof c2b;
+  crons: typeof crons;
   demo: typeof demo;
   export: typeof export_;
   helpers: typeof helpers;
@@ -45,6 +47,8 @@ declare const fullApi: ApiFromModules<{
   invitesInternal: typeof invitesInternal;
   invoices: typeof invoices;
   "lib/auth": typeof lib_auth;
+  "lib/credit": typeof lib_credit;
+  "lib/ledger": typeof lib_ledger;
   "lib/mpesaCrypto": typeof lib_mpesaCrypto;
   mpesa: typeof mpesa;
   mpesaInternal: typeof mpesaInternal;
