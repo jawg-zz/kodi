@@ -13,6 +13,7 @@ import {
 } from "./lib/auth";
 import { cachedDarajaToken, darajaBase } from "./lib/daraja";
 import { encryptSecret } from "./lib/mpesaCrypto";
+import { inspectInitiatorCert } from "./lib/initiator";
 import { txShape } from "./mpesaInternal";
 
 /** process.env in actions (Node runtime). Declared locally to avoid @types/node. */
@@ -118,6 +119,115 @@ export const saveMpesaCreds = action({
       passkeyEnc,
     });
     return null;
+  },
+});
+
+/**
+ * Owner: save the M-Pesa initiator operator (name + API password + X.509
+ * cert PEM from the Daraja portal). Unlocks Transaction Status, Balance,
+ * Reversals, B2C/B2B, Tax. Password is AES-GCM encrypted; the cert is
+ * public-key material. Parsed before storage so a bad paste fails fast.
+ */
+export const saveInitiatorCreds = action({
+  args: {
+    initiatorName: v.string(),
+    initiatorPassword: v.string(),
+    initiatorCertPem: v.string(),
+  },
+  returns: v.object({
+    certSubject: v.string(),
+    certValidTo: v.string(),
+    certKeyBits: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const caller: { userId: string; orgId: Id<"orgs"> } =
+      await ctx.runQuery(internal.helpers.assertOwner, {});
+    const name = args.initiatorName.trim();
+    const password = args.initiatorPassword;
+    const certPem = args.initiatorCertPem.trim();
+    if (!name || !password || !certPem) {
+      throw new ConvexError(
+        "Initiator name, password and certificate PEM are all required",
+      );
+    }
+    if (name.length > 64) throw new ConvexError("Initiator name too long");
+    if (/[@.]/.test(password)) {
+      throw new ConvexError(
+        "M-Pesa rejects initiator passwords containing @ or . — reset it on the org portal first",
+      );
+    }
+    let info: { subject: string; validTo: string; keyBits: number };
+    try {
+      info = inspectInitiatorCert(certPem);
+    } catch (e) {
+      throw new ConvexError(e instanceof Error ? e.message : String(e));
+    }
+    const creds = await ctx.runMutation(
+      internal.mpesaInternal.getDecryptedCreds,
+      { orgId: caller.orgId },
+    );
+    if (creds === null) {
+      throw new ConvexError(
+        "Save the Daraja consumer key/secret/shortcode first, then the initiator.",
+      );
+    }
+    await ctx.runMutation(internal.mpesaInternal.storeCreds, {
+      orgId: caller.orgId,
+      environment: creds.environment,
+      consumerKeyEnc: await encryptSecret(creds.consumerKey),
+      consumerSecretEnc: await encryptSecret(creds.consumerSecret),
+      shortcode: creds.shortcode,
+      passkeyEnc: await encryptSecret(creds.passkey),
+      initiatorName: name,
+      initiatorPasswordEnc: await encryptSecret(password),
+      initiatorCertPem: certPem,
+    });
+    return {
+      certSubject: info.subject,
+      certValidTo: info.validTo,
+      certKeyBits: info.keyBits,
+    };
+  },
+});
+
+/** Staff: initiator setup state for Settings (never returns secrets). */
+export const getInitiatorStatus = query({
+  args: {},
+  returns: v.object({
+    configured: v.boolean(),
+    initiatorName: v.string(),
+    certSubject: v.optional(v.string()),
+    certExpired: v.optional(v.boolean()),
+  }),
+  handler: async (ctx) => {
+    const caller = await assertStaff(ctx);
+    const row = await ctx.db
+      .query("mpesaCredentials")
+      .withIndex("by_org", (q) => q.eq("orgId", caller.orgId))
+      .first();
+    if (
+      row === null ||
+      row.initiatorName === undefined ||
+      row.initiatorCertPem === undefined
+    ) {
+      return { configured: false, initiatorName: "" };
+    }
+    let subject: string | undefined;
+    let expired: boolean | undefined;
+    try {
+      const info = inspectInitiatorCert(row.initiatorCertPem);
+      subject = info.subject;
+      expired = Date.parse(info.validTo) < Date.now();
+    } catch {
+      subject = "Unparseable certificate — re-paste it";
+      expired = true;
+    }
+    return {
+      configured: true,
+      initiatorName: row.initiatorName,
+      certSubject: subject,
+      certExpired: expired,
+    };
   },
 });
 

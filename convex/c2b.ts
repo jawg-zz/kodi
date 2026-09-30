@@ -9,7 +9,7 @@ import {
 import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { assertOrgMember, assertStaff, audit, normalizePhone, siteBaseUrl } from "./lib/auth";
+import { assertOrgMember, assertOwner, assertStaff, audit, normalizePhone, siteBaseUrl } from "./lib/auth";
 import { cachedDarajaToken, darajaBase } from "./lib/daraja";
 import { recordPaymentCore, reversePaymentInTx } from "./lib/ledger";
 
@@ -598,6 +598,101 @@ export const bulkMatchC2bByPhone = mutation({
 });
 
 /**
+ * C2B validation decision for the /c2b-validation HTTP route.
+ *
+ * Daraja calls validation first (8s window) and only forwards accepted hits
+ * to confirmation. Catalogue reject codes: C2B00011 bad shortcode,
+ * C2B00012 bad account, C2B00013 bad amount, C2B00016 anything else —
+ * the tenant sees ResultDesc on their phone, so messages are written for
+ * payers, not staff.
+ *
+ * Default mode is accept_all: structurally valid hits pass, matching
+ * happens at confirmation (typos park in review instead of bouncing
+ * money). Strict mode (per-org opt-in via setValidationMode) rejects
+ * unknown account numbers at the handset. Shortcode routing has no mode:
+ * a hit for an unregistered shortcode is always rejected. Needs
+ * Safaricom-side validation activation (apisupport email, ~6h).
+ */
+export const validateC2bInternal = internalMutation({
+  args: {
+    shortcode: v.string(),
+    transId: v.string(),
+    transAmount: v.number(),
+    billRef: v.optional(v.string()),
+  },
+  returns: v.object({ resultCode: v.string(), resultDesc: v.string() }),
+  handler: async (ctx, args) => {
+    const amount = Math.round(args.transAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return {
+        resultCode: "C2B00013",
+        resultDesc: "Invalid amount — enter the rent amount in whole shillings.",
+      };
+    }
+    const org = await orgForShortcode(ctx, args.shortcode);
+    if (org === null) {
+      return {
+        resultCode: "C2B00011",
+        resultDesc: "Unknown business number — check the Paybill number and try again.",
+      };
+    }
+    const creds = await ctx.db
+      .query("mpesaCredentials")
+      .withIndex("by_org", (q) => q.eq("orgId", org._id))
+      .first();
+    if ((creds?.validationMode ?? "accept_all") !== "strict") {
+      return { resultCode: "0", resultDesc: "Accepted" };
+    }
+    const ref = (args.billRef ?? "").trim().toUpperCase();
+    if (ref === "") {
+      return {
+        resultCode: "C2B00012",
+        resultDesc: "Missing account number — enter your rent account code.",
+      };
+    }
+    const byCode = await ctx.db
+      .query("tenants")
+      .withIndex("by_account", (q) => q.eq("accountCode", ref))
+      .first();
+    if (byCode !== null && byCode.orgId === org._id) {
+      return { resultCode: "0", resultDesc: "Accepted" };
+    }
+    return {
+      resultCode: "C2B00012",
+      resultDesc: `Account ${ref} not recognised — check the code on your statement and try again.`,
+    };
+  },
+});
+
+/** Owner: switch C2B validation strictness (Settings → Paybill section). */
+export const setValidationMode = mutation({
+  args: {
+    orgId: v.id("orgs"),
+    mode: v.union(v.literal("accept_all"), v.literal("strict")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await assertOwner(ctx, args.orgId);
+    const row = await ctx.db
+      .query("mpesaCredentials")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .first();
+    if (row === null) {
+      throw new ConvexError("Save Daraja credentials first");
+    }
+    await ctx.db.patch(row._id, { validationMode: args.mode });
+    await audit(ctx, {
+      orgId: args.orgId,
+      action: "c2b.validation_mode",
+      entityType: "mpesaCredentials",
+      entityId: row._id,
+      metadata: args.mode,
+    });
+    return null;
+  },
+});
+
+/**
  * Shared C2B confirmation write. Idempotent per TransID; matched hits
  * record through the atomic ledger (same dedupe/allocation/credit path as
  * STK), unmatched hits park in the review queue. Returns the row id.
@@ -854,6 +949,41 @@ export const reverseC2bInternal = internalMutation({
       message: "No C2B or payment row for this TransID — needs staff review",
       detail: transId,
     };
+  },
+});
+
+/**
+ * Auto-void on outbound-reversal completion: when Daraja's
+ * /async-result/reversal callback reports ResultCode 0 for a job that
+ * carries a paymentId, void the ledger payment through the standard
+ * reversal path (invoices + credit unwind exactly as a staff void).
+ * Idempotent — already-reversed payments are left alone.
+ */
+export const autoVoidOnReversalComplete = internalMutation({
+  args: { jobId: v.id("darajaJobs") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (job === null || job.paymentId === undefined) return null;
+    const payment = await ctx.db.get(job.paymentId);
+    if (payment === null || (payment.status ?? "active") !== "active") {
+      return null;
+    }
+    await reversePaymentInTx(
+      ctx,
+      job.paymentId,
+      "refunded",
+      `Daraja reversal completed (${job.conversationId})`,
+      "daraja-reversal",
+    );
+    await audit(ctx, {
+      orgId: job.orgId,
+      action: "daraja.reversal_complete",
+      entityType: "payment",
+      entityId: String(job.paymentId),
+      metadata: job.conversationId,
+    });
+    return null;
   },
 });
 

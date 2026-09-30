@@ -1,5 +1,6 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
+import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 const http = httpRouter();
@@ -207,7 +208,7 @@ http.route({
 http.route({
   path: "/c2b-validation",
   method: "POST",
-  handler: httpAction(async (_ctx, req) => {
+  handler: httpAction(async (ctx, req) => {
     let body: Record<string, unknown>;
     try {
       body = (await req.json()) as Record<string, unknown>;
@@ -225,7 +226,28 @@ http.route({
         400,
       );
     }
-    return json({ ResultCode: "0", ResultDesc: "Accepted" });
+    const rawAmount = body["TransAmount"];
+    const amount =
+      typeof rawAmount === "number"
+        ? Math.round(rawAmount)
+        : Math.round(Number(rawAmount));
+    const billRef =
+      typeof body["BillRefNumber"] === "string"
+        ? body["BillRefNumber"]
+        : undefined;
+    try {
+      const decision = await ctx.runMutation(
+        internal.c2b.validateC2bInternal,
+        { shortcode, transId, transAmount: amount, billRef },
+      );
+      return json(
+        { ResultCode: decision.resultCode, ResultDesc: decision.resultDesc },
+        decision.resultCode === "0" ? 200 : 400,
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return json({ ResultCode: "C2B00016", ResultDesc: msg }, 400);
+    }
   }),
 });
 
@@ -405,5 +427,313 @@ http.route({
     }
   }),
 });
+
+/**
+ * Generic Result/Timeout callbacks for outbound async jobs (Transaction
+ * Status, Balance, Reversal, B2C/B2B, Tax, Pull). Daraja POSTs
+ * {Result:{ResultType,ResultCode,ResultDesc,OriginatorConversationID,
+ * ConversationID,...}} — we resolve by conversation id and flip the job
+ * row. Paths are /async-result/:kind so one registration pattern covers
+ * all eight families without banned words.
+ */
+const ASYNC_KINDS = [
+  "txn_status",
+  "balance",
+  "reversal",
+  "b2c",
+  "topup",
+  "b2b",
+  "tax",
+  "pull",
+] as const;
+
+for (const kind of ASYNC_KINDS) {
+  http.route({
+    path: `/async-result/${kind}`,
+    method: "OPTIONS",
+    handler: httpAction(async () => {
+      return new Response("ok", { status: 200, headers: cors() });
+    }),
+  });
+  http.route({
+    path: `/async-timeout/${kind}`,
+    method: "OPTIONS",
+    handler: httpAction(async () => {
+      return new Response("ok", { status: 200, headers: cors() });
+    }),
+  });
+  const handleAsync = async (
+    ctx: ActionCtx,
+    req: Request,
+    timedOut: boolean,
+  ): Promise<Response> => {
+    const started = Date.now();
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      return json({ ResultCode: "C2B00016", ResultDesc: "Invalid JSON" }, 400);
+    }
+    const result = (body["Result"] ?? {}) as Record<string, unknown>;
+    const str = (o: Record<string, unknown>, k: string): string | undefined => {
+      const v = o[k];
+      return typeof v === "string" ? v : undefined;
+    };
+    const originator =
+      str(result, "OriginatorConversationID") ??
+      str(body, "OriginatorConversationID");
+    const conversation =
+      str(result, "ConversationID") ?? str(body, "ConversationID");
+    if (!originator && !conversation) {
+      return json({ ResultCode: "C2B00016", ResultDesc: "Missing conversation id" }, 400);
+    }
+    const code = timedOut
+      ? "timeout"
+      : String(result["ResultCode"] ?? body["ResultCode"] ?? "-1");
+    const desc =
+      str(result, "ResultDesc") ?? str(body, "ResultDesc") ?? (timedOut ? "Queue timeout — poll Transaction Status" : undefined);
+    const resolved = await ctx
+      .runMutation(internal.darajaJobs.resolveJobByConversation, {
+        originatorConversationId: originator,
+        conversationId: conversation,
+        resultCode: code,
+        resultDesc: desc,
+        rawResult: JSON.stringify(body).slice(0, 2000),
+      })
+      .catch(() => null);
+    // Kind-specific side effects live in verify.ts/reconcile.ts via job
+    // polling — the callback only flips the row + logs, never money moves.
+    // (Exception: reversal completion auto-voids; B2C flips settlements.)
+    if (resolved !== null && code === "0" && resolved.kind === "reversal") {
+      await ctx
+        .runMutation(internal.c2b.autoVoidOnReversalComplete, {
+          jobId: resolved._id,
+        })
+        .catch(() => null);
+    }
+    if (resolved !== null && resolved.kind === "b2c") {
+      const raw =
+        typeof body["Result"] === "object" && body["Result"] !== null
+          ? (body["Result"] as Record<string, unknown>)
+          : {};
+      const params = raw["ResultParameters"];
+      let receipt: string | undefined;
+      if (
+        params !== null &&
+        typeof params === "object" &&
+        Array.isArray((params as { ResultParameter?: unknown }).ResultParameter)
+      ) {
+        for (const p of (params as { ResultParameter: Array<{ Name?: unknown; Value?: unknown }> }).ResultParameter) {
+          if (p?.Name === "TransactionReceipt" && typeof p.Value === "string") {
+            receipt = p.Value;
+          }
+        }
+      }
+      await ctx
+        .runMutation(internal.payoutsInternal.settleB2cResult, {
+          originatorConversationId: originator,
+          conversationId: conversation,
+          ok: code === "0",
+          receipt,
+        })
+        .catch(() => null);
+    }
+    await ctx
+      .runMutation(internal.c2b.logWebhookInternal, {
+        orgId: resolved?.orgId ?? undefined,
+        route: timedOut ? `async-timeout/${kind}` : `async-result/${kind}`,
+        transId: originator ?? conversation,
+        outcome: resolved === null ? "unknown-job" : code === "0" ? "done" : "failed",
+        detail: desc?.slice(0, 200),
+        latencyMs: Date.now() - started,
+      })
+      .catch(() => null);
+    return json({ ResultCode: "0", ResultDesc: "Acknowledged" });
+  };
+  http.route({
+    path: `/async-result/${kind}`,
+    method: "POST",
+    handler: httpAction(async (ctx, req) => handleAsync(ctx, req, false)),
+  });
+  http.route({
+    path: `/async-timeout/${kind}`,
+    method: "POST",
+    handler: httpAction(async (ctx, req) => handleAsync(ctx, req, true)),
+  });
+}
+
+/**
+ * Bill Manager payment callback: Safaricom POSTs
+ * {transactionId, paidAmount, msisdn (FULL), dateCreated,
+ * accountReference, shortCode} and retries 5× until acknowledged.
+ * Ingest dedupes by transactionId, reconciles through the ledger, and we
+ * acknowledge so Safaricom sends the tenant the e-receipt.
+ */
+http.route({
+  path: "/billmanager-callback",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response("ok", { status: 200, headers: cors() });
+  }),
+});
+
+http.route({
+  path: "/billmanager-callback",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    const started = Date.now();
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      return json({ error: "Invalid JSON body" }, 400);
+    }
+    const str = (k: string): string | undefined => {
+      const v = body[k];
+      return typeof v === "string" ? v : undefined;
+    };
+    const transactionId = (str("transactionId") ?? "").trim();
+    const shortCode = (str("shortCode") ?? "").trim();
+    const rawAmount = body["paidAmount"];
+    const amount =
+      typeof rawAmount === "number"
+        ? Math.round(rawAmount)
+        : Math.round(Number(rawAmount));
+    const msisdn = (str("msisdn") ?? "").trim();
+    if (transactionId === "" || shortCode === "" || msisdn === "") {
+      return json({ error: "Missing transactionId/shortCode/msisdn" }, 400);
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return json({ error: "Bad paidAmount" }, 400);
+    }
+    try {
+      const res = await ctx.runMutation(
+        internal.billManagerInternal.ingestPayment,
+        {
+          shortcode: shortCode,
+          transactionId,
+          paidAmount: amount,
+          msisdn,
+          accountReference: str("accountReference"),
+          dateCreated: str("dateCreated"),
+        },
+      );
+      await ctx
+        .runMutation(internal.c2b.logWebhookInternal, {
+          orgId: undefined,
+          route: "billmanager-callback",
+          transId: transactionId,
+          shortcode: shortCode,
+          outcome: res.deduplicated ? "duplicate" : res.status,
+          detail: `${amount} KES · ${str("accountReference") ?? "no ref"}`,
+          latencyMs: Date.now() - started,
+        })
+        .catch(() => null);
+      // Acknowledge → Safaricom sends the e-receipt to the tenant.
+      return json({ acknowledged: true, status: res.status });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return json({ error: msg }, /Unknown business shortcode/.test(msg) ? 404 : 400);
+    }
+  }),
+});
+
+/**
+ * C2B Hakikisha host (REVERSED direction — Safaricom calls US after
+ * apisupport onboarding + reciprocal B2C Hakikisha contract):
+ *  - POST /hakikisha-token: mint a token for Safaricom's notify calls.
+ *  - POST /hakikisha-notify {accountNumber, shortcode}: return
+ *    {accountName} shown to the payer pre-confirm on STK/USSD/app.
+ * Typos die at source; the review queue shrinks to phone-only cases.
+ */
+http.route({
+  path: "/hakikisha-token",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response("ok", { status: 200, headers: cors() });
+  }),
+});
+
+http.route({
+  path: "/hakikisha-token",
+  method: "POST",
+  handler: httpAction(async () => {
+    // Token contract is whatever apisupport provisions at onboarding;
+    // acknowledge with a timestamped opaque token.
+    return json({
+      access_token: `kodi-hk-${Date.now().toString(36)}`,
+      expires_in: "3599",
+    });
+  }),
+});
+
+http.route({
+  path: "/hakikisha-notify",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response("ok", { status: 200, headers: cors() });
+  }),
+});
+
+http.route({
+  path: "/hakikisha-notify",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    let body: Record<string, unknown>;
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      return json({ accountName: "" }, 400);
+    }
+    const account = String(
+      body["accountNumber"] ?? body["BillRefNumber"] ?? "",
+    ).trim().toUpperCase();
+    const shortcode = String(
+      body["shortcode"] ?? body["BusinessShortCode"] ?? "",
+    ).trim();
+    if (account === "" || shortcode === "") {
+      return json({ accountName: "" }, 400);
+    }
+    const name = await ctx
+      .runQuery(internal.hakikishaInternal.lookupAccountName, {
+        shortcode,
+        account,
+      })
+      .catch(() => null);
+    if (name === null) return json({ accountName: "" }, 404);
+    return json({ accountName: name });
+  }),
+});
+
+/**
+ * Pull Transactions callback stubs. The query path used here is
+ * synchronous polling (pullC2bWindow), but one-time registration sends
+ * these URLs — they acknowledge + log so Daraja never sees a dead hook.
+ */
+for (const p of ["/pull-result", "/pull-timeout"]) {
+  http.route({
+    path: p,
+    method: "OPTIONS",
+    handler: httpAction(async () => {
+      return new Response("ok", { status: 200, headers: cors() });
+    }),
+  });
+  http.route({
+    path: p,
+    method: "POST",
+    handler: httpAction(async (ctx, req) => {
+      const raw = await req.text().catch(() => "");
+      await ctx
+        .runMutation(internal.c2b.logWebhookInternal, {
+          orgId: undefined,
+          route: p.slice(1),
+          outcome: "ack",
+          detail: raw.slice(0, 200),
+        })
+        .catch(() => null);
+      return json({ ResultCode: "0", ResultDesc: "Acknowledged" });
+    }),
+  });
+}
 
 export default http;

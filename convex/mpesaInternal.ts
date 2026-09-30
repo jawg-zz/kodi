@@ -207,6 +207,11 @@ export const storeCreds = internalMutation({
     consumerSecretEnc: v.string(),
     shortcode: v.string(),
     passkeyEnc: v.string(),
+    initiatorName: v.optional(v.string()),
+    initiatorPasswordEnc: v.optional(v.string()),
+    initiatorCertPem: v.optional(v.string()),
+    bongaUsernameEnc: v.optional(v.string()),
+    bongaPasswordEnc: v.optional(v.string()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -220,6 +225,47 @@ export const storeCreds = internalMutation({
       await ctx.db.patch(existing._id, args);
     }
     return null;
+  },
+});
+
+/**
+ * Internal: read the decrypted initiator name/password/cert for actions
+ * that need a SecurityCredential. Null when the owner never set them —
+ * callers must fail with a Settings-pointer error, never a bare null deref.
+ * Never exposed to clients.
+ */
+export const getDecryptedInitiator = internalMutation({
+  args: { orgId: v.id("orgs") },
+  returns: v.union(
+    v.object({
+      environment: v.union(v.literal("sandbox"), v.literal("production")),
+      shortcode: v.string(),
+      initiatorName: v.string(),
+      initiatorPassword: v.string(),
+      initiatorCertPem: v.string(),
+    }),
+    v.null(),
+  ),
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("mpesaCredentials")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .first();
+    if (
+      row === null ||
+      row.initiatorName === undefined ||
+      row.initiatorPasswordEnc === undefined ||
+      row.initiatorCertPem === undefined
+    ) {
+      return null;
+    }
+    return {
+      environment: row.environment,
+      shortcode: row.shortcode,
+      initiatorName: row.initiatorName,
+      initiatorPassword: await decryptSecret(row.initiatorPasswordEnc),
+      initiatorCertPem: row.initiatorCertPem,
+    };
   },
 });
 

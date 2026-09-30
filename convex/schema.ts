@@ -287,6 +287,31 @@ export default defineSchema({
      */
     c2bRegistered: v.optional(v.boolean()),
     c2bRegisteredAt: v.optional(v.number()),
+    /**
+     * Initiator credentials for Transaction Status / Balance / Reversal /
+     * B2C / B2B / Tax APIs. Password is AES-GCM encrypted; the X.509 cert
+     * PEM is public-key material (safe as plaintext). Set via the
+     * saveInitiatorCreds owner action (Settings → Initiator & payouts).
+     */
+    initiatorName: v.optional(v.string()),
+    initiatorPasswordEnc: v.optional(v.string()),
+    initiatorCertPem: v.optional(v.string()),
+    /** C2B validation strictness: accept_all (default, money-safe) or strict. */
+    validationMode: v.optional(
+      v.union(v.literal("accept_all"), v.literal("strict")),
+    ),
+    /** Lipa na Bonga operator auth (separate SHA256 user/pass scheme). */
+    bongaUsernameEnc: v.optional(v.string()),
+    bongaPasswordEnc: v.optional(v.string()),
+    /** Bill Manager opt-in state; appKey is AES-GCM encrypted. */
+    billManagerOptedIn: v.optional(v.boolean()),
+    billManagerAppKeyEnc: v.optional(v.string()),
+    billManagerEmail: v.optional(v.string()),
+    /** Pull Transactions one-time registration + nightly cursor. */
+    pullRegistered: v.optional(v.boolean()),
+    lastPullAt: v.optional(v.number()),
+    /** Nightly Account Balance snapshot cursor. */
+    lastBalanceAt: v.optional(v.number()),
   }).index("by_org", ["orgId"]),
 
   /**
@@ -329,9 +354,120 @@ export default defineSchema({
     refundAmount: v.number(),
     notes: v.optional(v.string()),
     settledBy: v.optional(v.string()),
+    /** Daraja B2C payout link once the refund leaves via M-Pesa. */
+    b2cConversationId: v.optional(v.string()),
+    b2cReceipt: v.optional(v.string()),
+    b2cStatus: v.optional(
+      v.union(v.literal("pending"), v.literal("sent"), v.literal("failed")),
+    ),
   })
     .index("by_org", ["orgId"])
     .index("by_tenant", ["tenantId"]),
+
+  /**
+   * Outbound Daraja async jobs: Transaction Status lookups, Balance
+   * queries, Reversals, B2C/B2B payouts, Tax remittances, Pull windows.
+   * One row per OriginatorConversationID (Daraja's own dedupe key):
+   * accepted ≠ completed — result callbacks flip the row to done/failed.
+   */
+  darajaJobs: defineTable({
+    orgId: v.id("orgs"),
+    kind: v.union(
+      v.literal("txn_status"),
+      v.literal("balance"),
+      v.literal("reversal"),
+      v.literal("b2c"),
+      v.literal("topup"),
+      v.literal("b2b"),
+      v.literal("tax"),
+      v.literal("pull"),
+    ),
+    conversationId: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("done"),
+      v.literal("failed"),
+    ),
+    requestSummary: v.optional(v.string()),
+    resultCode: v.optional(v.string()),
+    resultDesc: v.optional(v.string()),
+    rawResult: v.optional(v.string()),
+    paymentId: v.optional(v.id("payments")),
+    tenantId: v.optional(v.id("tenants")),
+    amount: v.optional(v.number()),
+  })
+    .index("by_conversation", ["conversationId"])
+    .index("by_org", ["orgId"])
+    .index("by_org_kind", ["orgId", "kind"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  /**
+   * Bill Manager app state per org: opt-in result, mirror cursor, callback
+   * dedupe (transactionId is idempotent across the 5× callback retries).
+   */
+  billManagerState: defineTable({
+    orgId: v.id("orgs"),
+    optedIn: v.boolean(),
+    appKeyEnc: v.optional(v.string()),
+    email: v.optional(v.string()),
+    lastMirroredAt: v.optional(v.number()),
+    /** transactionIds already ingested (capped list, newest last). */
+    seenTransactionIds: v.optional(v.array(v.string())),
+  }).index("by_org", ["orgId"]),
+
+  /**
+   * Dynamic QR codes minted per invoice (base64 PNG from Daraja). Cached
+   * so prints don't re-mint; regenerable when the balance changes.
+   */
+  invoiceQrs: defineTable({
+    orgId: v.id("orgs"),
+    invoiceId: v.id("invoices"),
+    qrBase64: v.string(),
+    amount: v.number(),
+    refNo: v.string(),
+  })
+    .index("by_invoice", ["invoiceId"])
+    .index("by_org", ["orgId"]),
+
+  /**
+   * Ratiba standing-order mandates: tenant authorizes once, executions
+   * arrive as C2B hits against the mandate's account reference.
+   */
+  ratibaMandates: defineTable({
+    orgId: v.id("orgs"),
+    tenantId: v.id("tenants"),
+    mandateName: v.string(),
+    amount: v.number(),
+    frequency: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("active"),
+      v.literal("cancelled"),
+    ),
+    darajaRef: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_tenant", ["tenantId"]),
+
+  /**
+   * KYC / fraud-signal checks per tenant: national-ID validation, SIM swap
+   * date, SIM age, IMSI bundle. Cached so repeat views don't rebill.
+   */
+  kycChecks: defineTable({
+    orgId: v.id("orgs"),
+    tenantId: v.id("tenants"),
+    checkType: v.union(
+      v.literal("mobile_validation"),
+      v.literal("sim_swap"),
+      v.literal("sim_age"),
+      v.literal("imsi"),
+    ),
+    result: v.string(),
+    detail: v.optional(v.string()),
+    checkedAt: v.number(),
+  })
+    .index("by_tenant_type", ["tenantId", "checkType"])
+    .index("by_org", ["orgId"]),
 
   tenantCredits: defineTable({
     orgId: v.id("orgs"),
