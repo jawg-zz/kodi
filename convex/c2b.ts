@@ -162,6 +162,29 @@ function shortName(p: C2bPayload): string {
   return [p.FirstName, p.MiddleName, p.LastName].filter(Boolean).join(" ");
 }
 
+/**
+ * C2B v2 masks the sender MSISDN (e.g. "2547***126") while v1 sent a
+ * SHA-256 hash. Either way the full number is unrecoverable, so phone
+ * matching is prefix+suffix pattern matching:
+ *  - "2547***126" → tenants whose phone starts 2547 and ends 126;
+ *  - a full 12-digit number (sandbox simulator, legacy hits) → exact match;
+ *  - a 64-hex hash (v1 residue) → unmatchable, skip the layer cleanly.
+ * A pattern hit counts as a hint (suggestions, anomaly history), never a
+ * sole auto-match key unless exactly one tenant fits.
+ */
+export function msisdnMatch(
+  raw: string,
+  phone: string,
+): "exact" | "pattern" | "none" {
+  const digits = raw.replace(/\D/g, "");
+  if (digits !== "" && digits === phone.replace(/\D/g, "")) return "exact";
+  const m = raw.match(/^(\d{3,5})\*+(\d{2,4})$/);
+  if (m === null) return "none";
+  const [, prefix, suffix] = m;
+  const p = phone.replace(/\D/g, "");
+  return p.startsWith(prefix) && p.endsWith(suffix) ? "pattern" : "none";
+}
+
 type OrgRow = {
   _id: Id<"orgs">;
   shortcode: string;
@@ -231,7 +254,8 @@ async function anomalyScan(
   amount: number,
   msisdn: string,
 ): Promise<void> {
-  // Brand-new sender: no prior C2B hit from this phone at all.
+  // Brand-new sender: no prior C2B hit from this number or pattern.
+  // Masked v2 numbers compare by raw string (same mask = same sender band).
   const prior = await ctx.db
     .query("c2bPayments")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -282,12 +306,12 @@ async function anomalyScan(
  * Layered tenant match for a confirmation hit:
  *  1. exact account code (BillRefNumber, case-insensitive),
  *  2. national ID (tenants know it by heart — accepted as-is),
- *  3. sender phone (MSISDN) against the org's tenant phones,
+ *  3. sender phone: exact when the full MSISDN arrives, single-pattern
+ *     hit when C2B v2 masks it (2547***126), hint-only otherwise,
  *  4. unmatched → pending review, never dropped.
  *
- * Layers 2–3 log which key matched so staff can see a hit matched loosely.
- * Skips layers cleanly when data is missing (empty national ID, unknown
- * phone) instead of failing.
+ * Layers log which key matched so staff can see a hit matched loosely.
+ * Skips layers cleanly when data is missing instead of failing.
  */
 async function matchTenant(
   ctx: MutationCtx,
@@ -322,27 +346,35 @@ async function matchTenant(
       }
     }
   }
-  const phone = normalizePhone(msisdn);
-  if (phone !== null) {
-    const byPhone = await ctx.db
-      .query("tenants")
-      .withIndex("by_org_phone", (q) => q.eq("orgId", orgId).eq("phone", phone))
-      .first();
-    if (byPhone !== null) {
-      return {
-        tenantId: byPhone._id,
-        reason:
-          ref !== ""
+  // Sender phone: v2 masks to 2547***126, so collect pattern fits and
+  // auto-match only a single unambiguous one.
+  const tenants = await ctx.db
+    .query("tenants")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const fits = tenants.filter(
+    (t) => t.status !== "moved_out" && msisdnMatch(msisdn, t.phone) !== "none",
+  );
+  const exact = fits.filter((t) => msisdnMatch(msisdn, t.phone) === "exact");
+  const single = exact.length === 1 ? exact[0] : fits.length === 1 ? fits[0] : null;
+  if (single !== null) {
+    const kind = msisdnMatch(msisdn, single.phone);
+    return {
+      tenantId: single._id,
+      reason:
+        kind === "exact"
+          ? ref !== ""
             ? `sender phone (account "${billRef}" not recognised)`
-            : "sender phone",
-      };
-    }
+            : "sender phone"
+          : `masked sender ${msisdn} fits ${single.full_name} alone`,
+    };
   }
+  const phone = normalizePhone(msisdn);
   return {
     tenantId: null,
     reason:
       ref !== ""
-        ? `no tenant for account "${billRef}"${phone ? " or sender phone" : ""}`
+        ? `no tenant for account "${billRef}"${phone || fits.length > 0 ? " or sender phone" : ""}${fits.length > 1 ? ` (${fits.length} share the masked pattern — review)` : ""}`
         : "no account number and sender phone not recognised",
   };
 }
@@ -433,7 +465,6 @@ export const suggestC2bTenant = query({
       .join(" ");
     const ref = (row.billRef ?? "").trim().toUpperCase();
     const refDigits = ref.replace(/\D/g, "");
-    const senderPhone = normalizePhone(row.msisdn);
 
     const tenants = await ctx.db
       .query("tenants")
@@ -473,9 +504,15 @@ export const suggestC2bTenant = query({
           }
         }
       }
-      if (senderPhone !== null && t.phone === senderPhone) {
+      // v2 masks the number: exact hit scores full, a lone pattern fit
+      // scores as a hint (staff confirm — never auto-match on a pattern).
+      const fit = msisdnMatch(row.msisdn, t.phone);
+      if (fit === "exact") {
         score += 0.4;
         signals.push("sender phone");
+      } else if (fit === "pattern") {
+        score += 0.2;
+        signals.push(`number fits ${row.msisdn}`);
       }
       if (score >= 0.3 && signals.length > 0) {
         scored.push({
@@ -494,9 +531,9 @@ export const suggestC2bTenant = query({
 });
 
 /**
- * Staff: match every queued hit whose sender phone belongs to exactly one
- * tenant. One audit entry per matched row; ambiguous rows stay queued.
- * Returns the number matched.
+ * Staff: match every queued hit whose sender number fits exactly one
+ * tenant (exact number, or a lone v2 masked-pattern fit). One audit entry
+ * per matched row; ambiguous rows stay queued. Returns the number matched.
  */
 export const bulkMatchC2bByPhone = mutation({
   args: { orgId: v.id("orgs") },
@@ -509,21 +546,18 @@ export const bulkMatchC2bByPhone = mutation({
         q.eq("orgId", args.orgId).eq("status", "pending_review"),
       )
       .collect();
+    const tenants = await ctx.db
+      .query("tenants")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const live = tenants.filter((t) => t.status !== "moved_out");
     let matched = 0;
     let skipped = 0;
     for (const row of queue) {
-      const phone = normalizePhone(row.msisdn);
-      if (phone === null) {
-        skipped += 1;
-        continue;
-      }
-      const tenant = await ctx.db
-        .query("tenants")
-        .withIndex("by_org_phone", (q) =>
-          q.eq("orgId", args.orgId).eq("phone", phone),
-        )
-        .first();
-      if (tenant === null || tenant.status === "moved_out") {
+      const fits = live.filter((t) => msisdnMatch(row.msisdn, t.phone) !== "none");
+      const exact = fits.filter((t) => msisdnMatch(row.msisdn, t.phone) === "exact");
+      const tenant = exact.length === 1 ? exact[0] : fits.length === 1 ? fits[0] : null;
+      if (tenant === null) {
         skipped += 1;
         continue;
       }
@@ -545,7 +579,10 @@ export const bulkMatchC2bByPhone = mutation({
       await ctx.db.patch(row._id, {
         tenantId: tenant._id,
         status: "matched",
-        matchReason: `bulk-matched by sender phone to ${tenant.full_name}`,
+        matchReason:
+          msisdnMatch(row.msisdn, tenant.phone) === "exact"
+            ? `bulk-matched by sender phone to ${tenant.full_name}`
+            : `bulk-matched by masked number ${row.msisdn} to ${tenant.full_name} (lone fit — verify SMS)`,
         paymentId: res.id,
       });
       await audit(ctx, {
@@ -1043,7 +1080,9 @@ export const registerC2bUrls = action({
     }
     const confirmUrl = `${siteBase}/c2b-confirmation`;
     const validUrl = `${siteBase}/c2b-validation`;
-    const regRes = await fetch(`${base}/mpesa/c2b/v1/registerurl`, {
+    // C2B v2 (current per Daraja 3.0 docs): payloads carry a masked MSISDN
+    // (2547***126) instead of v1's SHA-256 hash — see msisdnMatch below.
+    const regRes = await fetch(`${base}/mpesa/c2b/v2/registerurl`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${tokenData.access_token}`,
@@ -1359,7 +1398,9 @@ export const verifyC2bTransaction = query({
     const checks: string[] = [];
     let risk: "low" | "medium" | "high" = "low";
 
-    // History from this sender phone across all C2B hits.
+    // History from this sender across all C2B hits. v2 masks the number,
+    // so same-mask counts as the same sender band (weaker than an exact
+    // number, and the checks below say so where it matters).
     const prior = await ctx.db
       .query("c2bPayments")
       .withIndex("by_org", (q) => q.eq("orgId", row.orgId))
@@ -1367,6 +1408,7 @@ export const verifyC2bTransaction = query({
     const fromSender = prior.filter(
       (p) => p.msisdn === row.msisdn && p._id !== row._id,
     );
+    const masked = row.msisdn.includes("*");
     const matchedBefore = fromSender.filter((p) => p.status === "matched");
     const avg =
       matchedBefore.length > 0
@@ -1379,6 +1421,10 @@ export const verifyC2bTransaction = query({
     if (matchedBefore.length === 0) {
       risk = "medium";
       checks.push("First payment from this sender — confirm the tenant's M-Pesa SMS before matching.");
+    } else if (masked) {
+      checks.push(
+        `${matchedBefore.length} earlier payment${matchedBefore.length === 1 ? "" : "s"} from this masked number matched cleanly — same number band, not proof of same phone.`,
+      );
     } else {
       checks.push(
         `${matchedBefore.length} earlier payment${matchedBefore.length === 1 ? "" : "s"} from this sender matched cleanly.`,
@@ -1475,17 +1521,22 @@ export const simulateC2b = query({
       }
     }
     if (match === null) {
-      const phone = normalizePhone(args.msisdn);
-      if (phone !== null) {
-        const byPhone = await ctx.db
-          .query("tenants")
-          .withIndex("by_org_phone", (q) =>
-            q.eq("orgId", args.orgId).eq("phone", phone),
-          )
-          .first();
-        if (byPhone !== null) {
-          match = { tenantId: byPhone._id, reason: "sender phone" };
-        }
+      const tenants = await ctx.db
+        .query("tenants")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .collect();
+      const live = tenants.filter((t) => t.status !== "moved_out");
+      const fits = live.filter((t) => msisdnMatch(args.msisdn, t.phone) !== "none");
+      const exact = fits.filter((t) => msisdnMatch(args.msisdn, t.phone) === "exact");
+      const single = exact.length === 1 ? exact[0] : fits.length === 1 ? fits[0] : null;
+      if (single !== null) {
+        match = {
+          tenantId: single._id,
+          reason:
+            msisdnMatch(args.msisdn, single.phone) === "exact"
+              ? "sender phone"
+              : `masked sender ${args.msisdn} fits ${single.full_name} alone`,
+        };
       }
     }
     // FIFO preview for the matched tenant (same sort as the ledger).
@@ -1513,7 +1564,6 @@ export const simulateC2b = query({
     // Top-3 suggestions when unmatched (same scorer, trimmed).
     const suggestions: { tenantName: string; score: number; signals: string[] }[] = [];
     if (match === null) {
-      const senderPhone = normalizePhone(args.msisdn);
       const tenants = await ctx.db
         .query("tenants")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -1530,9 +1580,13 @@ export const simulateC2b = query({
             signals.push("account close");
           }
         }
-        if (senderPhone !== null && t.phone === senderPhone) {
+        const fit = msisdnMatch(args.msisdn, t.phone);
+        if (fit === "exact") {
           score += 0.4;
           signals.push("sender phone");
+        } else if (fit === "pattern") {
+          score += 0.2;
+          signals.push(`number fits ${args.msisdn}`);
         }
         if (score >= 0.3 && signals.length > 0) {
           scored.push({

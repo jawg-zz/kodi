@@ -668,3 +668,40 @@ test("createTenant births the row with its code (creation invariant)", async () 
   const stored = await t.run(async (ctx) => ctx.db.get(tenant._id));
   expect(stored?.accountCode).toBe(tenant.accountCode);
 });
+
+test("msisdnMatch grades exact, pattern, and none", async () => {
+  const { msisdnMatch } = await import("./c2b");
+  expect(msisdnMatch("254700000001", "254700000001")).toBe("exact");
+  expect(msisdnMatch("2547***001", "254700000001")).toBe("pattern");
+  expect(msisdnMatch("2547***002", "254700000001")).toBe("none");
+  expect(msisdnMatch("94c2c311d522da950619227b3361752a42042db7e1e699b26e628305c68a88", "254700000001")).toBe("none");
+  expect(msisdnMatch("", "254700000001")).toBe("none");
+});
+
+test("v2 masked number auto-matches a lone pattern fit", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId, asStaff } = await seedOrg(t);
+  const { tenantId, unitId } = await seedTenant(t, orgId);
+  await seedInvoice(t, orgId, tenantId, unitId);
+  const res = await confirm(t, {
+    transId: "TRX-MASK1",
+    billRef: "WRONG",
+    msisdn: "2547***001",
+  });
+  expect(res.status).toBe("matched");
+  const rows = await asStaff.query(api.c2b.listC2bPayments, { orgId });
+  expect(rows.find((r) => r.transId === "TRX-MASK1")?.matchReason).toContain("alone");
+});
+
+test("v2 masked number shared by two tenants parks for review", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId } = await seedOrg(t);
+  await seedTenant(t, orgId, "254700000001");
+  await seedTenant(t, orgId, "254711000001");
+  const res = await confirm(t, {
+    transId: "TRX-MASK2",
+    billRef: "WRONG",
+    msisdn: "2547***001",
+  });
+  expect(res.status).toBe("pending_review");
+});
