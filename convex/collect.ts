@@ -98,7 +98,13 @@ export const mintInvoiceQr = action({
     const qr =
       typeof parsed["QRCode"] === "string" ? (parsed["QRCode"] as string) : "";
     if (qr === "") {
-      throw new ConvexError("Daraja returned no QR image — check the shortcode is a Paybill");
+      // Surface the actual keys Daraja returned — field names vary by
+      // endpoint family (qrCode/qrImage/data...) and guessing wrong here
+      // burns a live call each retry. The key list tells us the real name.
+      const keys = Object.keys(parsed).join(", ") || "(empty/non-JSON body)";
+      throw new ConvexError(
+        `Daraja generated the QR (code 00) but returned no QRCode field — keys: ${keys}. Body: ${res.body.slice(0, 200)}`,
+      );
     }
     await ctx.runMutation(internal.collectInternal.storeQr, {
       orgId: inv.orgId,
