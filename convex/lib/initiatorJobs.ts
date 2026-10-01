@@ -135,15 +135,46 @@ export async function postCandidates(
       last404 = raw.slice(0, 160);
       continue;
     }
+    // The gateway's product errors ("no apiproduct match") don't follow
+    // the ResponseCode JSON envelope — sometimes not JSON at all. Check
+    // the raw body first so these portal-fix failures never surface as a
+    // confusing parse error or "Invalid Access Token" trace.
+    if (/no apiproduct match/i.test(raw.slice(0, 500))) {
+      throw new ConvexError(
+        `${label}: your Daraja app isn't subscribed to this API product — open the app at developer.safaricom.co.ke, subscribe it to the ${label} product, then retry. Keys and shortcode are fine.`,
+      );
+    }
     let data: Record<string, unknown> = {};
     try {
       data = JSON.parse(raw) as Record<string, unknown>;
     } catch {
+      // Non-JSON with a 2xx is a bare success acknowledgement (some
+      // sync endpoints return plain text) — accept it as code "0".
+      if (res.status >= 200 && res.status < 300) {
+        return {
+          responseCode: "0",
+          responseDescription: raw.slice(0, 200),
+          conversationId: undefined,
+          originatorConversationId: undefined,
+          body: raw.slice(0, 2000),
+        };
+      }
       throw new ConvexError(
         `${label} rejected (HTTP ${res.status}) with a non-JSON reply: ${raw.slice(0, 200)}`,
       );
     }
     const code = String(data["ResponseCode"] ?? data["responseCode"] ?? "");
+    // JSON without any response code on a 2xx is also a bare success
+    // (e.g. `{app_key: ...}` opt-in bodies) — don't demand a "0".
+    if (code === "" && res.status >= 200 && res.status < 300) {
+      return {
+        responseCode: "0",
+        responseDescription: "",
+        conversationId: undefined,
+        originatorConversationId: undefined,
+        body: raw.slice(0, 2000),
+      };
+    }
     if (code !== "0") {
       const desc = String(
         data["ResponseDescription"] ??
@@ -151,10 +182,6 @@ export async function postCandidates(
           data["errorMessage"] ??
           raw.slice(0, 300),
       );
-      // "no apiproduct match" means the Daraja app isn't subscribed to the
-      // product behind this endpoint — a portal fix, not a code bug. Say
-      // so plainly: the raw message ("Invalid Access Token") misleads
-      // operators into re-entering keys that are actually fine.
       if (/no apiproduct match/i.test(`${desc} ${raw.slice(0, 300)}`)) {
         throw new ConvexError(
           `${label}: your Daraja app isn't subscribed to this API product — open the app at developer.safaricom.co.ke, subscribe it to the ${label} product, then retry. Keys and shortcode are fine.`,

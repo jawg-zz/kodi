@@ -20,7 +20,14 @@ declare const process: { env: Record<string, string | undefined> };
  * C2B v2's masked number.
  */
 
-const BILLMANAGER_BASE = "v1/billmanager-invoice";
+/**
+ * Production base path per the go-live email
+ * (https://api.safaricom.co.ke/v1/billmanager-invoice/v1/billmanager-invoice/*):
+ * the family segment doubles. Sandbox may use the single-segment form —
+ * candidates below try the email-confirmed path first.
+ */
+const BILLMANAGER_BASE = "v1/billmanager-invoice/v1/billmanager-invoice";
+const BILLMANAGER_BASE_SANDBOX = "v1/billmanager-invoice";
 
 /**
  * Bill Manager POST with the appKey header. postCandidates doesn't take
@@ -38,7 +45,12 @@ async function billManagerPost(
   label: string,
   timeoutMs = 30_000,
 ): Promise<{ status: number; body: string }> {
-  const candidates = [path, `mpesa/${path}`];
+  // Email-confirmed production path first, then the single-segment
+  // sandbox form, then the mpesa/-prefixed legacy form.
+  const single = path.startsWith(`${BILLMANAGER_BASE}/`)
+    ? `${BILLMANAGER_BASE_SANDBOX}/${path.slice(BILLMANAGER_BASE.length + 1)}`
+    : path;
+  const candidates = [path, single, `mpesa/${single}`];
   let last404 = "";
   for (const p of candidates) {
     const res = await fetch(`${base}/${p}`, {
@@ -138,7 +150,11 @@ export const optInBillManager = action({
         credential: "",
         siteBase,
       },
-      [`${BILLMANAGER_BASE}/optin`, `mpesa/${BILLMANAGER_BASE}/optin`],
+      [
+        `${BILLMANAGER_BASE}/optin`,
+        `${BILLMANAGER_BASE_SANDBOX}/optin`,
+        `mpesa/${BILLMANAGER_BASE_SANDBOX}/optin`,
+      ],
       {
         shortcode: creds.shortcode,
         email,

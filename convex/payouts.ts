@@ -32,8 +32,9 @@ const REVERSAL_CANDIDATES = [
 ];
 
 const B2C_CANDIDATES = [
-  "mpesa/b2c/v3/paymentrequest",
+  // Go-live email confirms production B2C is v1 (not v3) — try it first.
   "mpesa/b2c/v1/paymentrequest",
+  "mpesa/b2c/v3/paymentrequest",
   "b2c/v1/paymentrequest",
 ];
 
