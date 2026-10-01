@@ -117,12 +117,11 @@ type PostResult = {
 };
 
 /**
- * Payloads carrying embedded base64 (QR images) run tens of KB — far
- * past the 2000-char debug truncation. Truncate those and JSON.parse
- * breaks mid-string, so the caller sees "no QR field" for a perfectly
- * good response. Threshold is generous: control envelopes are <2KB.
+ * Success bodies pass through intact: truncating a base64 payload (QR
+ * images run 2–30KB) breaks JSON.parse mid-string, and the caller sees
+ * "missing field" for a perfectly good response. Error bodies stay
+ * truncated at the throw sites — only the success path keeps bytes.
  */
-const FULL_BODY_THRESHOLD = 8192;
 
 /**
  * POST a JSON body to the first candidate path that isn't a 404.
@@ -254,7 +253,7 @@ export async function postCandidates(
           : undefined,
       // Keep the full body when it's large (base64 QR payloads) so the
       // caller can parse fields past the debug-truncation point.
-      body: raw.length > FULL_BODY_THRESHOLD ? raw : raw.slice(0, 2000),
+      body: raw,
     };
   }
   throw new ConvexError(
