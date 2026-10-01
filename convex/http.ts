@@ -4,6 +4,7 @@ import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { billManagerPost } from "./billManager";
 import { cachedDarajaToken, darajaBase } from "./lib/daraja";
+import { classifyStkCode } from "./lib/stkOutcome";
 
 const http = httpRouter();
 
@@ -175,18 +176,31 @@ http.route({
       }
     }
 
-    const status = code === 1032 ? "failed" : code === 1037 ? "timeout" : "failed";
-    await ctx.runMutation(internal.mpesaInternal.updateTx, {
-      checkoutRequestId: cb.CheckoutRequestID,
-      status,
-      resultCode: code,
-      resultDesc: cb.ResultDesc,
-    });
-    await log(status, {
+    // Terminal handset outcomes only (shared classifyStkCode): cancelled
+    // fails the row, unreachable times it out. Any other callback code
+    // (transitional states, unknown) leaves the row pending — the poll
+    // loop or a later callback resolves it. Failing here would tell staff
+    // to resend a live prompt (double-charge risk).
+    const outcome = classifyStkCode(code);
+    if (outcome === "cancelled" || outcome === "timeout") {
+      const status = outcome === "timeout" ? "timeout" : "failed";
+      await ctx.runMutation(internal.mpesaInternal.updateTx, {
+        checkoutRequestId: cb.CheckoutRequestID,
+        status,
+        resultCode: code,
+        resultDesc: cb.ResultDesc,
+      });
+      await log(status, {
+        transId: cb.CheckoutRequestID,
+        detail: cb.ResultDesc?.slice(0, 200),
+      });
+      return json({ ok: true, status });
+    }
+    await log("pending", {
       transId: cb.CheckoutRequestID,
-      detail: cb.ResultDesc?.slice(0, 200),
+      detail: `Non-terminal callback code ${code}: ${cb.ResultDesc?.slice(0, 160) ?? "no description"}`,
     });
-    return json({ ok: true, status });
+    return json({ ok: true, status: "pending" });
   }),
 });
 

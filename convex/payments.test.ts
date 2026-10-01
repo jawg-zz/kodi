@@ -464,3 +464,18 @@ test("paymentsBreakdown carries status and allocation detail", async () => {
   expect(breakdown.rows[0]).toMatchObject({ status: "voided" });
   expect(breakdown.rows[0].allocationSummary).toContain("2026-08");
 });
+
+
+test("classifyStkCode: terminal codes map, transitional/unknown stay pending", async () => {
+  const { classifyStkCode } = await import("./lib/stkOutcome");
+  expect(classifyStkCode("0")).toBe("success");
+  expect(classifyStkCode(0)).toBe("success");
+  expect(classifyStkCode("1031")).toBe("cancelled");
+  expect(classifyStkCode("1032")).toBe("cancelled");
+  expect(classifyStkCode("1037")).toBe("timeout");
+  // Transitional query states and unknowns must NOT fail the row.
+  expect(classifyStkCode("")).toBe("pending");
+  expect(classifyStkCode(undefined)).toBe("pending");
+  expect(classifyStkCode("9999")).toBe("pending");
+  expect(classifyStkCode("1")).toBe("pending");
+});

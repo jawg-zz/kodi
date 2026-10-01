@@ -13,6 +13,7 @@ import {
   stkPassword,
 } from "./lib/auth";
 import { cachedDarajaToken, darajaBase } from "./lib/daraja";
+import { classifyStkCode } from "./lib/stkOutcome";
 import { encryptSecret } from "./lib/mpesaCrypto";
 import { inspectInitiatorCert } from "./lib/initiator";
 import { txShape } from "./mpesaInternal";
@@ -483,31 +484,27 @@ export const stkStatus = action({
             resultDesc: data.ResultDesc,
           });
         }
-      } else if (code === "1032") {
+      } else if (classifyStkCode(code) === "cancelled") {
+        // Cancelled at the handset (1031 = handset timeout variant).
         await ctx.runMutation(internal.mpesaInternal.updateTx, {
           checkoutRequestId: tx.checkoutRequestId,
           status: "failed",
-          resultCode: 1032,
+          resultCode: Number(code),
           resultDesc: data.ResultDesc,
         });
-      } else if (code === "1037") {
+      } else if (classifyStkCode(code) === "timeout") {
         await ctx.runMutation(internal.mpesaInternal.updateTx, {
           checkoutRequestId: tx.checkoutRequestId,
           status: "timeout",
           resultCode: 1037,
           resultDesc: data.ResultDesc,
         });
-      } else if (code && code !== "0") {
-        // Any other Daraja result is terminal for the handset prompt —
-        // mark it failed with the code so staff see WHY instead of a
-        // "pending" row that only clears on the 30-minute sweep.
-        await ctx.runMutation(internal.mpesaInternal.updateTx, {
-          checkoutRequestId: tx.checkoutRequestId,
-          status: "failed",
-          resultCode: Number(code) || undefined,
-          resultDesc: data.ResultDesc,
-        });
       }
+      // classifyStkCode maps anything else (transitional "still under
+      // processing" states, unknown codes, empty) to pending: the next
+      // poll or the callback resolves it; a truly dead prompt clears on
+      // the 30-minute sweep. Failing the row here would tell staff to
+      // resend a live prompt (double-charge risk).
     } catch {
       // Daraja unreachable — return cached row; frontend keeps polling.
     }
