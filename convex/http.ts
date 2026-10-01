@@ -2,6 +2,8 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { billManagerPost } from "./billManager";
+import { cachedDarajaToken, darajaBase } from "./lib/daraja";
 
 const http = httpRouter();
 
@@ -629,8 +631,65 @@ http.route({
           latencyMs: Date.now() - started,
         })
         .catch(() => null);
-      // Acknowledge → Safaricom sends the e-receipt to the tenant.
-      return json({ acknowledged: true, status: res.status });
+      // Docs step 3: POST the reconciliation acknowledgment so Safaricom
+      // sends the tenant the e-receipt. Best-effort — the ledger write
+      // above already committed, so an ack failure only logs (the money
+      // stays recorded; staff can re-ack from the receipt page later).
+      // httpAction ctx has no runAction, so the POST goes through the
+      // exported billManagerPost helper inline.
+      let acked: string | undefined;
+      if (res.ack !== undefined && !res.deduplicated) {
+        try {
+          // httpAction ctx is action-capable (fetch + runQuery/runMutation),
+          // so mint the token and read creds inline — no helper needed.
+          const creds = await ctx.runMutation(
+            internal.mpesaInternal.getDecryptedCreds,
+            { orgId: res.ack.orgId },
+          );
+          if (creds === null) throw new Error("Save Daraja credentials first");
+          const appKey = await ctx.runQuery(
+            internal.billManagerInternal.getAppKey,
+            { orgId: res.ack.orgId },
+          );
+          if (appKey === null) throw new Error("Bill Manager is not opted in");
+          const base = darajaBase(creds.environment);
+          const token = await cachedDarajaToken(ctx, res.ack.orgId, creds);
+          const ackRes = await billManagerPost(
+            base,
+            token,
+            appKey,
+            "v1/billmanager-invoice/reconciliation",
+            {
+              paymentDate: res.ack.paymentDate,
+              paidAmount: String(res.ack.paidAmount),
+              accountReference: res.ack.accountReference,
+              transactionId: res.ack.transactionId,
+              phoneNumber: res.ack.phoneNumber,
+              fullName: res.ack.fullName,
+              invoiceName: res.ack.invoiceName,
+              externalReference: res.ack.externalReference,
+            },
+            "Bill Manager",
+          );
+          acked = `HTTP ${ackRes.status}: ${ackRes.body.slice(0, 120)}`;
+          if (ackRes.status < 200 || ackRes.status >= 300) {
+            throw new Error(acked);
+          }
+        } catch (e) {
+          acked = undefined;
+          await ctx
+            .runMutation(internal.c2b.logWebhookInternal, {
+              orgId: res.ack.orgId,
+              route: "billmanager-callback",
+              transId: transactionId,
+              shortcode: shortCode,
+              outcome: "ack-failed",
+              detail: (e instanceof Error ? e.message : String(e)).slice(0, 200),
+            })
+            .catch(() => null);
+        }
+      }
+      return json({ acknowledged: true, status: res.status, acked });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return json({ error: msg }, /Unknown business shortcode/.test(msg) ? 404 : 400);

@@ -21,13 +21,29 @@ declare const process: { env: Record<string, string | undefined> };
  */
 
 /**
- * Production base path per the go-live email
- * (https://api.safaricom.co.ke/v1/billmanager-invoice/v1/billmanager-invoice/*):
- * the family segment doubles. Sandbox may use the single-segment form —
- * candidates below try the email-confirmed path first.
+ * Canonical base per the portal docs
+ * (https://developer.safaricom.co.ke/apis/BillManager):
+ * single-segment `v1/billmanager-invoice/*` for optin, single-invoicing,
+ * bulk-invoicing, reconciliation, cancel-*, change-*. The go-live email
+ * shows a doubled `v1/billmanager-invoice/v1/billmanager-invoice/*`
+ * production form — kept as fallback, plus the mpesa/-prefixed legacy.
+ * Cancel-bulk is plural per docs (`cancel-bulk-invoices`).
  */
-const BILLMANAGER_BASE = "v1/billmanager-invoice/v1/billmanager-invoice";
-const BILLMANAGER_BASE_SANDBOX = "v1/billmanager-invoice";
+const BILLMANAGER_BASE = "v1/billmanager-invoice";
+const BILLMANAGER_BASE_DOUBLED = "v1/billmanager-invoice/v1/billmanager-invoice";
+
+/** "2026-09" → "September 2026" (docs' billedPeriod format). */
+export function billManagerPeriod(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  const names = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) {
+    return month;
+  }
+  return `${names[m - 1]} ${y}`;
+}
 
 /**
  * Bill Manager POST with the appKey header. postCandidates doesn't take
@@ -36,7 +52,7 @@ const BILLMANAGER_BASE_SANDBOX = "v1/billmanager-invoice";
  * portal-fix failures (unsubscribed product, wrong path) into the same
  * plain language the shared caller uses.
  */
-async function billManagerPost(
+export async function billManagerPost(
   base: string,
   token: string,
   appKey: string,
@@ -45,12 +61,12 @@ async function billManagerPost(
   label: string,
   timeoutMs = 30_000,
 ): Promise<{ status: number; body: string }> {
-  // Email-confirmed production path first, then the single-segment
-  // sandbox form, then the mpesa/-prefixed legacy form.
-  const single = path.startsWith(`${BILLMANAGER_BASE}/`)
-    ? `${BILLMANAGER_BASE_SANDBOX}/${path.slice(BILLMANAGER_BASE.length + 1)}`
+  // Docs-canonical single-segment first, then the email's doubled
+  // production form, then the mpesa/-prefixed legacy form.
+  const doubled = path.startsWith(`${BILLMANAGER_BASE}/`)
+    ? `${BILLMANAGER_BASE_DOUBLED}/${path.slice(BILLMANAGER_BASE.length + 1)}`
     : path;
-  const candidates = [path, single, `mpesa/${single}`];
+  const candidates = [path, doubled, `mpesa/${path}`];
   let last404 = "";
   for (const p of candidates) {
     const res = await fetch(`${base}/${p}`, {
@@ -152,8 +168,8 @@ export const optInBillManager = action({
       },
       [
         `${BILLMANAGER_BASE}/optin`,
-        `${BILLMANAGER_BASE_SANDBOX}/optin`,
-        `mpesa/${BILLMANAGER_BASE_SANDBOX}/optin`,
+        `${BILLMANAGER_BASE_DOUBLED}/optin`,
+        `mpesa/${BILLMANAGER_BASE}/optin`,
       ],
       {
         shortcode: creds.shortcode,
@@ -249,15 +265,21 @@ export const mirrorInvoicesToBillManager = action({
                 balance: number;
                 items: Array<{ itemName: string; amount: number }>;
               }) => ({
+              // Field names + formats per the portal docs: billedPhoneNumber
+              // (not billedPhone), billedPeriod "Month YYYY" (not "YYYY-MM"),
+              // dueDate "YYYY-MM-DD 00:00:00.00", amounts as strings.
               externalReference: inv.invoiceId,
               billedFullName: inv.tenantName,
-              billedPhone: inv.phone,
-              billedPeriod: inv.month,
+              billedPhoneNumber: inv.phone,
+              billedPeriod: billManagerPeriod(inv.month),
               invoiceName: `Rent ${inv.month}`,
-              dueDate: inv.dueDate,
+              dueDate: `${inv.dueDate} 00:00:00.00`,
               accountReference: inv.accountCode,
-              amount: inv.balance,
-              invoiceItems: inv.items,
+              amount: String(inv.balance),
+              invoiceItems: inv.items.map((it) => ({
+                itemName: it.itemName,
+                amount: String(it.amount),
+              })),
             })),
           },
           "Bill Manager",
@@ -325,7 +347,7 @@ export const cancelBillManagerInvoice = action({
     const token = await cachedDarajaToken(ctx, args.orgId, creds);
     const path =
       args.bulk === true
-        ? `${BILLMANAGER_BASE}/cancel-bulk-invoice`
+        ? `${BILLMANAGER_BASE}/cancel-bulk-invoices`
         : `${BILLMANAGER_BASE}/cancel-single-invoice`;
     const res = await billManagerPost(
       base,
@@ -418,6 +440,77 @@ export const acknowledgeBillManagerReceipt = mutation({
       entityId: args.transactionId,
     });
     return null;
+  },
+});
+
+const ackShape = v.object({
+  orgId: v.id("orgs"),
+  paymentDate: v.string(),
+  paidAmount: v.number(),
+  accountReference: v.string(),
+  transactionId: v.string(),
+  phoneNumber: v.string(),
+  fullName: v.string(),
+  invoiceName: v.string(),
+  externalReference: v.string(),
+});
+
+/**
+ * Fire the reconciliation acknowledgment POST (docs step 3) after a
+ * matched ingest: {paymentDate, paidAmount, accountReference,
+ * transactionId, phoneNumber, fullName, invoiceName, externalReference}
+ * → `.../reconciliation`. Only then does Safaricom send the tenant the
+ * e-receipt. Returns the gateway's resmsg for the webhook log.
+ */
+export const acknowledgeBillManagerPayment = action({
+  args: { ack: ackShape },
+  returns: v.string(),
+  handler: async (ctx, args): Promise<string> => {
+    const appKey = await ctx.runQuery(
+      internal.billManagerInternal.getAppKey,
+      { orgId: args.ack.orgId },
+    );
+    if (appKey === null) {
+      throw new ConvexError("Bill Manager is not opted in");
+    }
+    const creds = await ctx.runMutation(
+      internal.mpesaInternal.getDecryptedCreds,
+      { orgId: args.ack.orgId },
+    );
+    if (creds === null) throw new ConvexError("Save Daraja credentials first");
+    const base = darajaBase(creds.environment);
+    const token = await cachedDarajaToken(ctx, args.ack.orgId, creds);
+    const res = await billManagerPost(
+      base,
+      token,
+      appKey,
+      `${BILLMANAGER_BASE}/reconciliation`,
+      {
+        paymentDate: args.ack.paymentDate,
+        paidAmount: String(args.ack.paidAmount),
+        accountReference: args.ack.accountReference,
+        transactionId: args.ack.transactionId,
+        phoneNumber: args.ack.phoneNumber,
+        fullName: args.ack.fullName,
+        invoiceName: args.ack.invoiceName,
+        externalReference: args.ack.externalReference,
+      },
+      "Bill Manager",
+    );
+    let msg = `HTTP ${res.status}`;
+    try {
+      const data = JSON.parse(res.body) as {
+        resmsg?: string;
+        rescode?: string;
+      };
+      msg = `${data.rescode ?? res.status}: ${data.resmsg ?? res.body.slice(0, 120)}`;
+    } catch {
+      msg = res.body.slice(0, 160);
+    }
+    if (res.status < 200 || res.status >= 300) {
+      throw new ConvexError(`Reconciliation ack rejected: ${msg}`);
+    }
+    return msg;
   },
 });
 

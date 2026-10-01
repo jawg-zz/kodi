@@ -589,3 +589,49 @@ test("postCandidates maps gateway errorCode/errorMessage envelope", async () => 
     globalThis.fetch = origFetch;
   }
 });
+
+test("billManagerPeriod formats YYYY-MM as Month YYYY", async () => {
+  const { billManagerPeriod } = await import("./billManager");
+  expect(billManagerPeriod("2026-09")).toBe("September 2026");
+  expect(billManagerPeriod("2026-01")).toBe("January 2026");
+  expect(billManagerPeriod("bogus")).toBe("bogus");
+});
+
+test("billManager ingest returns ack fields on fresh match", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId } = await seedOrg(t);
+  const { tenantId, unitId } = await seedTenant(t, orgId);
+  await t.run(async (ctx) =>
+    ctx.db.insert("invoices", {
+      orgId,
+      tenantId,
+      unitId,
+      month: "2026-09",
+      lines: { rent: 20000, water: 500, garbage: 300, other: 0 },
+      total: 20800,
+      dueDate: "2026-09-05",
+      status: "unpaid",
+      balance: 20800,
+    }),
+  );
+  const res = await t.run(async (ctx) =>
+    ctx.runMutation(internal.billManagerInternal.ingestPayment, {
+      shortcode: SHORTCODE,
+      transactionId: "BM-ACK-1",
+      paidAmount: 20800,
+      msisdn: "254700000001",
+      accountReference: "GC-A1",
+      dateCreated: "2026-09-15",
+    }),
+  );
+  expect(res.status).toBe("matched");
+  expect(res.ack).toMatchObject({
+    paidAmount: 20800,
+    accountReference: "GC-A1",
+    transactionId: "BM-ACK-1",
+    phoneNumber: "254700000001",
+    fullName: "Jane Tenant",
+    paymentDate: "2026-09-15",
+  });
+  expect(res.ack?.invoiceName).toBe("Rent 2026-09");
+});

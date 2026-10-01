@@ -207,6 +207,22 @@ export const ingestPayment = internalMutation({
     returns: v.object({
       status: v.string(),
       deduplicated: v.boolean(),
+      // Acknowledgment fields for the reconciliation POST (docs step 3):
+      // only present on fresh matched ingests. The route fires the POST;
+      // without it Safaricom never sends the tenant the e-receipt.
+      ack: v.optional(
+        v.object({
+          orgId: v.id("orgs"),
+          paymentDate: v.string(),
+          paidAmount: v.number(),
+          accountReference: v.string(),
+          transactionId: v.string(),
+          phoneNumber: v.string(),
+          fullName: v.string(),
+          invoiceName: v.string(),
+          externalReference: v.string(),
+        }),
+      ),
     }),
     handler: async (ctx, args) => {
       // Route shortcode → org via the credentials scan (one row per org —
@@ -307,6 +323,31 @@ export const ingestPayment = internalMutation({
           seenTransactionIds: [...seen, args.transactionId].slice(-500),
         });
       }
-      return { status: "matched", deduplicated: false };
+      // Best-effort ack fields: tenant name + the invoice this payment
+      // most plausibly settles (newest open invoice). Missing pieces fall
+      // back to the callback values — the ack POST accepts them.
+      const tenant = await ctx.db.get(tenantId);
+      const openInv = await ctx.db
+        .query("invoices")
+        .withIndex("by_tenant_month", (q) => q.eq("tenantId", tenantId))
+        .order("desc")
+        .take(5);
+      const newestOpen = openInv.find((i) => i.balance > 0) ?? openInv[0];
+      return {
+        status: "matched",
+        deduplicated: false,
+        ack: {
+          orgId: orgRow.orgId,
+          paymentDate: (args.dateCreated ?? new Date().toISOString()).slice(0, 10),
+          paidAmount: Math.round(args.paidAmount),
+          accountReference: (args.accountReference ?? "").trim(),
+          transactionId: args.transactionId,
+          phoneNumber: args.msisdn,
+          fullName: tenant?.full_name ?? "",
+          invoiceName: newestOpen !== undefined ? `Rent ${newestOpen.month}` : "",
+          externalReference:
+            newestOpen !== undefined ? String(newestOpen._id) : "",
+        },
+      };
     },
 });
