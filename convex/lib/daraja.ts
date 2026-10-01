@@ -54,6 +54,21 @@ export async function cachedDarajaToken(
     { orgId },
   );
   if (cached !== null && isTokenFresh(cached.expiresAt)) return cached.token;
+  return await mintFreshDarajaToken(ctx, orgId, creds);
+}
+
+/**
+ * Mint unconditionally, ignoring the cache. Used for the 401-retry path:
+ * Daraja kills the previous token on every mint, so a cached token can
+ * be server-side-dead while looking fresh (portal test, parallel mint,
+ * expiry skew). Callers detect a 401, call this once, and retry the
+ * request a single time with the new token.
+ */
+export async function mintFreshDarajaToken(
+  ctx: ActionCtx,
+  orgId: Id<"orgs">,
+  creds: MintCreds,
+): Promise<string> {
   const base = darajaBase(creds.environment);
   const res = await fetch(
     `${base}/oauth/v1/generate?grant_type=client_credentials`,

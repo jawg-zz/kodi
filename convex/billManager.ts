@@ -2,7 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { action, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { assertOrgMember, assertStaff, audit, siteBaseUrl } from "./lib/auth";
-import { cachedDarajaToken, darajaBase } from "./lib/daraja";
+import { cachedDarajaToken, darajaBase, mintFreshDarajaToken } from "./lib/daraja";
 import { encryptSecret } from "./lib/mpesaCrypto";
 import { postCandidates } from "./lib/initiatorJobs";
 
@@ -165,6 +165,9 @@ export const optInBillManager = action({
         initiatorName: "",
         credential: "",
         siteBase,
+        // Stale-token retry: a cached token can be server-side-dead while
+        // looking fresh — on 401 the caller mints once and retries.
+        refreshToken: () => mintFreshDarajaToken(ctx, args.orgId, creds),
       },
       [
         `${BILLMANAGER_BASE}/optin`,

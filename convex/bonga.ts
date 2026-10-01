@@ -3,7 +3,7 @@ import { action } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { cachedDarajaToken, darajaBase } from "./lib/daraja";
+import { cachedDarajaToken, darajaBase, mintFreshDarajaToken } from "./lib/daraja";
 import { postCandidates } from "./lib/initiatorJobs";
 import { encryptSecret } from "./lib/mpesaCrypto";
 
@@ -41,6 +41,7 @@ async function bongaBundle(
   token: string;
   shortcode: string;
   auth: string;
+  refreshToken: () => Promise<string>;
 }> {
   const creds = await ctx.runMutation(
     internal.mpesaInternal.getDecryptedCreds,
@@ -62,6 +63,7 @@ async function bongaBundle(
     token,
     shortcode: creds.shortcode,
     auth: await bongaAuth(bonga.username, bonga.password),
+    refreshToken: () => mintFreshDarajaToken(ctx, orgId, creds),
   };
 }
 
@@ -97,6 +99,7 @@ export const quoteBongaPoints = action({
         initiatorName: "",
         credential: b.auth,
         siteBase: "",
+        refreshToken: b.refreshToken,
       },
       BONGA_CALC_CANDIDATES,
       { MSISDN: digits },
@@ -163,6 +166,7 @@ export const redeemBongaPoints = action({
         initiatorName: "",
         credential: b.auth,
         siteBase: "",
+        refreshToken: b.refreshToken,
       },
       BONGA_REDEEM_CANDIDATES,
       {

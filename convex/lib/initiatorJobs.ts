@@ -2,7 +2,7 @@ import { ConvexError } from "convex/values";
 import type { ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
-import { cachedDarajaToken, darajaBase } from "./daraja";
+import { cachedDarajaToken, darajaBase, mintFreshDarajaToken } from "./daraja";
 import { mintSecurityCredential } from "./initiator";
 
 /**
@@ -30,6 +30,13 @@ export type InitiatorBundle = {
   initiatorName: string;
   credential: string;
   siteBase: string;
+  /**
+   * Mint a brand-new token ignoring the cache, then return it. Set by
+   * actions that hold decrypted creds; postCandidates calls it once when
+   * a request 401s (Daraja kills tokens server-side on every parallel
+   * mint, so a cached token can be dead while looking fresh).
+   */
+  refreshToken?: () => Promise<string>;
 };
 
 /** Load + decrypt everything an initiator call needs, or throw. */
@@ -68,6 +75,7 @@ export async function initiatorBundle(
       init.initiatorCertPem,
     ),
     siteBase,
+    refreshToken: () => mintFreshDarajaToken(ctx, orgId, creds),
   };
 }
 
@@ -131,6 +139,22 @@ export async function postCandidates(
       body: JSON.stringify(payload),
     });
     const raw = await res.text();
+    // Stale-token retry: Daraja kills tokens server-side on every parallel
+    // mint, so a cached token can 401 while looking fresh. Refresh once
+    // and restart the sweep with the new token — a second 401 is real.
+    // The refreshToken hook is consumed (cleared) so the recursive retry
+    // cannot loop: if the fresh token also 401s, the normal error path
+    // below surfaces it.
+    if (
+      res.status === 401 &&
+      bundle.refreshToken !== undefined
+    ) {
+      const refresh = bundle.refreshToken;
+      bundle.refreshToken = undefined;
+      bundle.token = await refresh();
+      // Restart candidate sweep from the first path with the fresh token.
+      return await postCandidates(bundle, candidates, payload, label);
+    }
     if (res.status === 404) {
       last404 = raw.slice(0, 160);
       continue;

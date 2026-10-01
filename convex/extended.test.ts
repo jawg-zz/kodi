@@ -635,3 +635,78 @@ test("billManager ingest returns ack fields on fresh match", async () => {
   });
   expect(res.ack?.invoiceName).toBe("Rent 2026-09");
 });
+
+test("postCandidates refreshes the token once on 401 then retries", async () => {
+  const { postCandidates } = await import("./lib/initiatorJobs");
+  let calls = 0;
+  let refreshed = 0;
+  const bundle = {
+    orgId: "org1",
+    environment: "sandbox",
+    base: "https://sandbox.safaricom.co.ke",
+    token: "stale-token",
+    shortcode: "174379",
+    initiatorName: "",
+    credential: "",
+    siteBase: "",
+    refreshToken: async () => {
+      refreshed += 1;
+      return "fresh-token";
+    },
+  } as never;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls += 1;
+    const auth = (init?.headers as Record<string, string>)?.Authorization ?? "";
+    if (auth.includes("stale-token")) {
+      return new Response(
+        JSON.stringify({ requestId: "r1", errorCode: "401", errorMessage: "Unauthorized - Invalid Access Token" }),
+        { status: 401 },
+      );
+    }
+    return new Response(JSON.stringify({ ResponseCode: "0", ResponseDescription: "ok" }), {
+      status: 200,
+    });
+  }) as typeof fetch;
+  try {
+    const res = await postCandidates(bundle, ["v1/billmanager-invoice/optin"], {}, "Bill Manager");
+    expect(res.responseCode).toBe("0");
+    expect(calls).toBe(2);
+    expect(refreshed).toBe(1);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("postCandidates surfaces the second 401 instead of looping", async () => {
+  const { postCandidates } = await import("./lib/initiatorJobs");
+  let refreshed = 0;
+  const bundle = {
+    orgId: "org1",
+    environment: "sandbox",
+    base: "https://sandbox.safaricom.co.ke",
+    token: "bad-token",
+    shortcode: "174379",
+    initiatorName: "",
+    credential: "",
+    siteBase: "",
+    refreshToken: async () => {
+      refreshed += 1;
+      return "still-bad-token";
+    },
+  } as never;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({ requestId: "r2", errorCode: "401", errorMessage: "Unauthorized - Invalid Access Token" }),
+      { status: 401 },
+    )) as typeof fetch;
+  try {
+    await expect(
+      postCandidates(bundle, ["v1/billmanager-invoice/optin"], {}, "Bill Manager"),
+    ).rejects.toThrow(/said no \(401\)/);
+    expect(refreshed).toBe(1);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

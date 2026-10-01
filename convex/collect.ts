@@ -2,7 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { action, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { assertOrgMember } from "./lib/auth";
-import { cachedDarajaToken, darajaBase } from "./lib/daraja";
+import { cachedDarajaToken, darajaBase, mintFreshDarajaToken } from "./lib/daraja";
 import { postCandidates } from "./lib/initiatorJobs";
 
 /**
@@ -74,6 +74,7 @@ export const mintInvoiceQr = action({
       initiatorName: "",
       credential: "",
       siteBase: "",
+      refreshToken: () => mintFreshDarajaToken(ctx, inv.orgId, creds),
     };
     const res = await postCandidates(
       bundle,
@@ -180,6 +181,7 @@ export const verifyShortcodeOwner = action({
         initiatorName: "",
         credential: "",
         siteBase: "",
+        refreshToken: () => mintFreshDarajaToken(ctx, args.orgId, creds),
       },
       ORGINFO_CANDIDATES,
       { ShortCode: shortcode, OrgType: orgType },
