@@ -558,3 +558,34 @@ test("postCandidates detects apiproduct mismatch in non-JSON bodies", async () =
     globalThis.fetch = origFetch;
   }
 });
+
+test("postCandidates maps gateway errorCode/errorMessage envelope", async () => {
+  const { postCandidates } = await import("./lib/initiatorJobs");
+  const bundle = {
+    orgId: "org1",
+    environment: "sandbox",
+    base: "https://sandbox.safaricom.co.ke",
+    token: "tok",
+    shortcode: "174379",
+    initiatorName: "",
+    credential: "",
+    siteBase: "",
+  } as never;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        requestId: "abc-123",
+        errorCode: "401",
+        errorMessage: "Unauthorized - Invalid Access Token",
+      }),
+      { status: 401 },
+    )) as typeof fetch;
+  try {
+    await expect(
+      postCandidates(bundle, ["v1/billmanager-invoice/optin"], {}, "Bill Manager"),
+    ).rejects.toThrow(/said no \(401\): Unauthorized/);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

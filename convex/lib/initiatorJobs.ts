@@ -176,6 +176,15 @@ export async function postCandidates(
       };
     }
     if (code !== "0") {
+      // Gateway envelope (Bill Manager family): {requestId, errorCode,
+      // errorMessage} with no ResponseCode field. Map it into the same
+      // shape so the message below reads the real reason.
+      const gwCode = String(
+        data["errorCode"] ?? data["ErrorCode"] ?? "",
+      );
+      const gwMsg = String(
+        data["errorMessage"] ?? data["ErrorMessage"] ?? "",
+      );
       const desc = String(
         data["ResponseDescription"] ??
           data["responseDescription"] ??
@@ -187,11 +196,14 @@ export async function postCandidates(
           `${label}: your Daraja app isn't subscribed to this API product — open the app at developer.safaricom.co.ke, subscribe it to the ${label} product, then retry. Keys and shortcode are fine.`,
         );
       }
-      // TEMP-DEBUG: include the raw body so the gateway's actual field
-      // shape is visible in the UI error. Remove once parsed.
-      throw new ConvexError(
-        `${label} said no (${code || `HTTP ${res.status}`}): ${desc} | raw: ${raw.slice(0, 300)}`,
-      );
+      // Gateway-envelope rejection (e.g. Bill Manager 401s): surface the
+      // gateway's own code/message instead of an empty "said no ()".
+      if (gwCode !== "" && code === "") {
+        throw new ConvexError(
+          `${label} said no (${gwCode}): ${gwMsg || desc}`,
+        );
+      }
+      throw new ConvexError(`${label} said no (${code}): ${desc}`);
     }
     const conv = data["ConversationID"] ?? data["OriginatorConversationID"];
     return {
