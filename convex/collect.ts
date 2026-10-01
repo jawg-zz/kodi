@@ -102,6 +102,24 @@ export const mintInvoiceQr = action({
       parsed["QRCode"] ?? parsed["qrCode"] ?? parsed["qrCodeData"] ?? parsed["QRcode"];
     const qr = typeof qrRaw === "string" ? qrRaw : "";
     if (qr === "") {
+      // TEMP-DIAG: log key names + value types/sizes (never the image
+      // bytes) so we can see where Daraja actually puts the payload.
+      const shape = Object.entries(parsed)
+        .map(([k, v]) => {
+          if (typeof v === "string") return `${k}:string(${v.length})`;
+          if (v !== null && typeof v === "object") {
+            const inner = Object.keys(v as Record<string, unknown>).join("|");
+            return `${k}:object{${inner}}`;
+          }
+          return `${k}:${typeof v}`;
+        })
+        .join(", ");
+      await ctx.runMutation(internal.c2b.logWebhookInternal, {
+        orgId: inv.orgId,
+        route: "out-qr",
+        outcome: "qr-shape",
+        detail: `keys: ${shape || "(empty)"} · bodyLen ${res.body.length}`.slice(0, 500),
+      });
       throw new ConvexError(
         "Daraja generated the QR but the image field is missing — the shortcode may not be QR-enabled. Check the webhook log for details.",
       );
