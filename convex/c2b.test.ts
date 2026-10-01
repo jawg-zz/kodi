@@ -705,3 +705,78 @@ test("v2 masked number shared by two tenants parks for review", async () => {
   });
   expect(res.status).toBe("pending_review");
 });
+
+test("C2B confirmation for an already-recorded STK receipt links as duplicate with no second payment", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId } = await seedOrg(t);
+  const { tenantId, unitId } = await seedTenant(t, orgId);
+  await seedInvoice(t, orgId, tenantId, unitId);
+  // STK payment recorded first (as the callback reconcile would do it).
+  const paymentId = await t.run(async (ctx) =>
+    ctx.db.insert("payments", {
+      orgId,
+      tenantId,
+      amount: 1,
+      method: "mpesa_stk",
+      mpesaCode: "DUP-REC-1",
+      paidAt: Date.now(),
+      allocations: [],
+      receiptNo: "RCP-DUP-1",
+      status: "active",
+    }),
+  );
+  const countBefore = await t.run(async (ctx) =>
+    (await ctx.db.query("payments").collect()).length,
+  );
+  // The duplicate C2B confirmation for the same TransID arrives.
+  const res = await t.run(async (ctx) =>
+    ctx.runMutation(internal.c2b.recordC2bInternal, {
+      shortcode: SHORTCODE,
+      transId: "DUP-REC-1",
+      transAmount: 1,
+      billRef: "GIBBERISH",
+      msisdn: "254700000001",
+    }),
+  );
+  expect(res.status).toBe("matched");
+  expect(res.deduplicated).toBe(true);
+  expect(res.paymentId).toBe(paymentId);
+  const countAfter = await t.run(async (ctx) =>
+    (await ctx.db.query("payments").collect()).length,
+  );
+  expect(countAfter).toBe(countBefore);
+  const row = await t.run(async (ctx) => ctx.db.get(res.id));
+  expect(row?.matchReason).toMatch(/duplicate notification/);
+});
+
+test("C2B confirmation for a voided payment stays in review", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId } = await seedOrg(t);
+  const { tenantId } = await seedTenant(t, orgId);
+  await t.run(async (ctx) =>
+    ctx.db.insert("payments", {
+      orgId,
+      tenantId,
+      amount: 1,
+      method: "mpesa_stk",
+      mpesaCode: "DUP-VOID-1",
+      paidAt: Date.now(),
+      allocations: [],
+      receiptNo: "RCP-DUP-V1",
+      status: "voided",
+    }),
+  );
+  const res = await t.run(async (ctx) =>
+    ctx.runMutation(internal.c2b.recordC2bInternal, {
+      shortcode: SHORTCODE,
+      transId: "DUP-VOID-1",
+      transAmount: 1,
+      billRef: "GIBBERISH",
+      // Unknown sender: phone fallback must not match either, so the row
+      // parks in review instead of auto-linking the voided payment.
+      msisdn: "254799999999",
+    }),
+  );
+  expect(res.status).toBe("pending_review");
+  expect(res.deduplicated).toBe(false);
+});

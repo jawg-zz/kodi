@@ -13,6 +13,7 @@ import {
   listPayments,
   listTenants,
   listWebhookLog,
+  linkDuplicateC2bPayment,
   matchC2bPayment,
   queryTransactionStatus,
   quoteBongaPoints,
@@ -176,6 +177,7 @@ export function PaymentsPage() {
         <C2bReviewCard
           queue={c2bQueue}
           tenants={tenants}
+          payments={payments}
           orgId={org.id}
           onChanged={load}
         />
@@ -687,9 +689,10 @@ function WebhookCard({ hits, onClose }: {
  * money is sitting in M-Pesa — staff attach each row to the right tenant
  * (records through the ledger) or reject it with a reason.
  */
-function C2bReviewCard({ queue, tenants, orgId, onChanged }: {
+function C2bReviewCard({ queue, tenants, payments, orgId, onChanged }: {
   queue: C2bPayment[];
   tenants: Tenant[];
+  payments: PaymentWithRefs[];
   orgId: string;
   onChanged: () => Promise<void>;
 }) {
@@ -803,6 +806,7 @@ function C2bReviewCard({ queue, tenants, orgId, onChanged }: {
           <MatchModalBody
             payment={active}
             tenants={tenants}
+            payments={payments}
             tenantPick={tenantPick}
             setTenantPick={setTenantPick}
             reason={reason}
@@ -812,6 +816,7 @@ function C2bReviewCard({ queue, tenants, orgId, onChanged }: {
             onMatch={doMatch}
             onReject={doReject}
             onClose={close}
+            onChanged={onChanged}
           />
         </Modal>
       )}
@@ -819,9 +824,10 @@ function C2bReviewCard({ queue, tenants, orgId, onChanged }: {
   );
 }
 
-function MatchModalBody({ payment, tenants, tenantPick, setTenantPick, reason, setReason, busy, error, onMatch, onReject, onClose }: {
+function MatchModalBody({ payment, tenants, payments, tenantPick, setTenantPick, reason, setReason, busy, error, onMatch, onReject, onClose, onChanged }: {
   payment: C2bPayment;
   tenants: Tenant[];
+  payments: PaymentWithRefs[];
   tenantPick: string;
   setTenantPick: (v: string) => void;
   reason: string;
@@ -831,6 +837,7 @@ function MatchModalBody({ payment, tenants, tenantPick, setTenantPick, reason, s
   onMatch: () => void;
   onReject: () => void;
   onClose: () => void;
+  onChanged: () => Promise<void>;
 }) {
   const [suggestions, setSuggestions] = useState<C2bSuggestion[] | null>(null);
   const [risk, setRisk] = useState<{ risk: string; checks: string[] } | null>(null);
@@ -839,6 +846,30 @@ function MatchModalBody({ payment, tenants, tenantPick, setTenantPick, reason, s
   const [bonga, setBonga] = useState<{ points: number; value_kes: number } | null>(null);
   const [bongaBusy, setBongaBusy] = useState(false);
   const [bongaMsg, setBongaMsg] = useState<string | null>(null);
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkMsg, setLinkMsg] = useState<string | null>(null);
+
+  // Cross-channel duplicate: same receipt already recorded as a payment
+  // (STK callback won the race). Offer a one-tap link, no new entry.
+  const duplicateOf = payments.find(
+    (p) => (p.mpesa_code ?? "") !== "" && p.mpesa_code === payment.trans_id && (p.status ?? "active") === "active",
+  );
+
+  const doLink = async () => {
+    if (!duplicateOf) return;
+    setLinkBusy(true);
+    setLinkMsg(null);
+    try {
+      await linkDuplicateC2bPayment(payment.id, duplicateOf.id);
+      setLinkMsg(`Linked to ${duplicateOf.receipt_no} — no second entry recorded.`);
+      await onChanged();
+      onClose();
+    } catch (e) {
+      setLinkMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLinkBusy(false);
+    }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -958,6 +989,19 @@ function MatchModalBody({ payment, tenants, tenantPick, setTenantPick, reason, s
         </Button>
       </div>
       {darajaStatus && <p className="text-xs text-slate-500">{darajaStatus}</p>}
+      {duplicateOf && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+          <p>
+            Same receipt already recorded as <strong>{duplicateOf.receipt_no}</strong>
+            {duplicateOf.tenant?.full_name ? ` (${duplicateOf.tenant.full_name})` : ""} —{" "}
+            this looks like the duplicate C2B notification for that payment.
+          </p>
+          <Button size="sm" variant="secondary" className="mt-2" onClick={doLink} disabled={linkBusy}>
+            {linkBusy ? "Linking…" : `Link to ${duplicateOf.receipt_no} (no new entry)`}
+          </Button>
+        </div>
+      )}
+      {linkMsg && <p className="text-xs text-slate-600">{linkMsg}</p>}
       {bonga && (
         <div className="rounded-lg bg-slate-50 p-3 text-sm">
           <p>Sender holds <strong>{bonga.points} pts</strong> (~{bonga.value_kes} KES).</p>

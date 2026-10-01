@@ -922,6 +922,21 @@ export async function rejectC2bPayment(
   }
 }
 
+/** Link a queued hit to its already-recorded payment (same receipt, no new entry). */
+export async function linkDuplicateC2bPayment(
+  id: string,
+  paymentId: string,
+): Promise<void> {
+  try {
+    await convex.mutation((api as any).c2b.linkDuplicateC2bPayment, {
+      id,
+      paymentId,
+    });
+  } catch (e) {
+    return err(e);
+  }
+}
+
 /** Ranked tenant suggestions for a queued Paybill hit. */
 export async function suggestC2bTenant(id: string): Promise<C2bSuggestion[]> {
   try {

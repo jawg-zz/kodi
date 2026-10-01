@@ -742,6 +742,37 @@ export const recordC2bInternal = internalMutation({
     if (org === null) {
       throw new ConvexError("Unknown business shortcode");
     }
+    // Cross-channel duplicate: an STK push to a Paybill settles as a C2B
+    // credit, so Daraja delivers BOTH the STK callback (already reconciled
+    // to a payment) AND this confirmation for the same TransID. Link the
+    // row to the existing payment with no ledger write — recording again
+    // would double-count. Only active payments qualify; a voided/refunded
+    // payment leaves the row in review so staff see it.
+    const prior = await ctx.db
+      .query("payments")
+      .withIndex("by_org_code", (q) =>
+        q.eq("orgId", org._id).eq("mpesaCode", transId),
+      )
+      .first();
+    if (prior !== null && (prior.status ?? "active") === "active") {
+      const id = await ctx.db.insert("c2bPayments", {
+        orgId: org._id,
+        tenantId: prior.tenantId,
+        transId,
+        transAmount: amount,
+        billRef: args.billRef?.trim() || undefined,
+        msisdn: args.msisdn,
+        firstName: args.firstName,
+        middleName: args.middleName,
+        lastName: args.lastName,
+        transTime: args.transTime,
+        status: "matched",
+        matchReason: `duplicate notification for ${prior.receiptNo} — already recorded, no second entry`,
+        paymentId: prior._id,
+        rawPayload: args.rawPayload?.slice(0, 2000),
+      });
+      return { id, status: "matched" as const, deduplicated: true, paymentId: prior._id };
+    }
     await anomalyScan(ctx, org._id, transId, amount, args.msisdn);
     const match = await matchTenant(ctx, org._id, args.billRef, args.msisdn);
     if (match.tenantId === null) {
@@ -831,6 +862,53 @@ export const matchC2bPayment = mutation({
       metadata: JSON.stringify({ tenantId: args.tenantId, paymentId: res.id }),
     });
     return res.id;
+  },
+});
+
+/**
+ * Staff: link a pending-review hit to an already-recorded payment with
+ * the same TransID (cross-channel duplicate: STK callback recorded it,
+ * C2B confirmation queued it). No ledger write — only the link + reason.
+ * The automatic path in recordC2bInternal handles new arrivals; this
+ * covers pre-fix rows and edge cases staff spot by eye.
+ */
+export const linkDuplicateC2bPayment = mutation({
+  args: { id: v.id("c2bPayments"), paymentId: v.id("payments") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.id);
+    if (row === null) throw new ConvexError("C2B payment not found");
+    const caller = await assertStaff(ctx, row.orgId);
+    if (row.status !== "pending_review") {
+      throw new ConvexError("This payment is already handled.");
+    }
+    const payment = await ctx.db.get(args.paymentId);
+    if (payment === null || payment.orgId !== row.orgId) {
+      throw new ConvexError("Payment not found in this organization");
+    }
+    if (payment.mpesaCode !== row.transId) {
+      throw new ConvexError(
+        `Receipt mismatch: payment carries ${payment.mpesaCode ?? "no code"}, queue row is ${row.transId}. Link only same-receipt duplicates.`,
+      );
+    }
+    if ((payment.status ?? "active") !== "active") {
+      throw new ConvexError("That payment is voided/refunded — reject this row instead.");
+    }
+    await ctx.db.patch(args.id, {
+      tenantId: payment.tenantId,
+      status: "matched",
+      matchReason: `duplicate notification for ${payment.receiptNo} — already recorded, no second entry`,
+      paymentId: payment._id,
+    });
+    await audit(ctx, {
+      orgId: row.orgId,
+      actorUserId: caller.userId,
+      action: "c2b.link_duplicate",
+      entityType: "c2bPayment",
+      entityId: args.id,
+      metadata: JSON.stringify({ paymentId: payment._id }),
+    });
+    return null;
   },
 });
 
