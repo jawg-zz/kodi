@@ -737,3 +737,31 @@ test("postCandidates accepts zero-padded success codes (QR 00)", async () => {
     globalThis.fetch = origFetch;
   }
 });
+
+test("postCandidates keeps large bodies intact for base64 payloads", async () => {
+  const { postCandidates } = await import("./lib/initiatorJobs");
+  const bundle = {
+    orgId: "org1",
+    environment: "sandbox",
+    base: "https://sandbox.safaricom.co.ke",
+    token: "tok",
+    shortcode: "174379",
+    initiatorName: "",
+    credential: "",
+    siteBase: "",
+  } as never;
+  const big = "aGVsbG8=".repeat(3000); // ~24KB, like a QR PNG
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({ ResponseCode: "00", ResponseDescription: "Successfully Generated", QRCode: big }),
+      { status: 200 },
+    )) as typeof fetch;
+  try {
+    const res = await postCandidates(bundle, ["mpesa/qrcode/v1/generate"], {}, "Dynamic QR");
+    const parsed = JSON.parse(res.body) as { QRCode?: string };
+    expect(parsed.QRCode).toBe(big);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

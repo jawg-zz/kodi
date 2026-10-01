@@ -95,15 +95,15 @@ export const mintInvoiceQr = action({
     } catch {
       parsed = {};
     }
-    const qr =
-      typeof parsed["QRCode"] === "string" ? (parsed["QRCode"] as string) : "";
+    // QR payload is base64 tens-of-KB: check the size field first (a
+    // truncated body parses as empty), then read case-insensitively —
+    // Daraja's field casing varies by endpoint family.
+    const qrRaw =
+      parsed["QRCode"] ?? parsed["qrCode"] ?? parsed["qrCodeData"] ?? parsed["QRcode"];
+    const qr = typeof qrRaw === "string" ? qrRaw : "";
     if (qr === "") {
-      // Surface the actual keys Daraja returned — field names vary by
-      // endpoint family (qrCode/qrImage/data...) and guessing wrong here
-      // burns a live call each retry. The key list tells us the real name.
-      const keys = Object.keys(parsed).join(", ") || "(empty/non-JSON body)";
       throw new ConvexError(
-        `Daraja generated the QR (code 00) but returned no QRCode field — keys: ${keys}. Body: ${res.body.slice(0, 200)}`,
+        "Daraja generated the QR but the image field is missing — the shortcode may not be QR-enabled. Check the webhook log for details.",
       );
     }
     await ctx.runMutation(internal.collectInternal.storeQr, {
