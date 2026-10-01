@@ -3,6 +3,7 @@ import { PLANS, currentMonthKey, formatKES, planByCode } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import {
   clearDemoData,
+  clearDarajaToken,
   countUnits,
   createProperty,
   createTenant,
@@ -353,7 +354,34 @@ function DarajaSection() {
           <Field label="Passkey" required><Input type="password" value={passkey} onChange={(e) => setPasskey(e.target.value)} placeholder={creds?.configured ? "•••• (re-enter to change)" : ""} /></Field>
           {error && <ErrorBanner message={error} />}
           {msg && <p className="text-sm text-green-700">{msg}</p>}
-          <div><Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save credentials"}</Button></div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save credentials"}</Button>
+            {creds?.configured && (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setError(null);
+                  setMsg(null);
+                  try {
+                    await clearDarajaToken();
+                    setMsg("Cached token cleared — the next Daraja call mints fresh. Retry the failing action now.");
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : String(err));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Refresh access token
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-slate-400">
+            Saving credentials now clears the cached token automatically. Use Refresh only when Daraja rejects calls with 401 after a key change or portal test.
+          </p>
         </form>
         <C2bSection />
       </CardBody>

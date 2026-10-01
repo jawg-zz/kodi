@@ -1700,6 +1700,15 @@ export async function saveMpesaCreds(values: {
   }
 }
 
+/** Owner: drop the cached Daraja token so the next call mints fresh. */
+export async function clearDarajaToken(): Promise<void> {
+  try {
+    await convex.mutation((api as any).mpesa.clearDarajaToken, {});
+  } catch (e) {
+    return err(e);
+  }
+}
+
 /** Full-org JSON backup for Settings → Export. */
 export async function exportOrgBackup(
   orgId: string,

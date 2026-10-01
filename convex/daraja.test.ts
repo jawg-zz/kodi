@@ -121,3 +121,35 @@ test("fallback TTL covers a token reply that omits expires_in", () => {
   // just pins the constant the mint path uses when expires_in is absent.
   expect(TOKEN_TTL_FALLBACK_MS).toBe(3_500_000);
 });
+
+test("storeCreds clears the cached token (credential rotation)", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) =>
+    ctx.runMutation(internal.mpesaInternal.storeCachedDarajaToken, {
+      orgId,
+      token: "old-token",
+      expiresAt: Date.now() + 3_600_000,
+    }),
+  );
+  const before = await t.run(async (ctx) =>
+    ctx.runQuery(internal.mpesaInternal.getCachedDarajaToken, { orgId }),
+  );
+  expect(before?.token).toBe("old-token");
+  // Saving (possibly rotated) credentials must invalidate the token minted
+  // under the old ones — otherwise calls 401 until expiry.
+  await t.run(async (ctx) =>
+    ctx.runMutation(internal.mpesaInternal.storeCreds, {
+      orgId,
+      environment: "sandbox",
+      consumerKeyEnc: "new-x",
+      consumerSecretEnc: "new-y",
+      shortcode: "174379",
+      passkeyEnc: "new-z",
+    }),
+  );
+  const after = await t.run(async (ctx) =>
+    ctx.runQuery(internal.mpesaInternal.getCachedDarajaToken, { orgId }),
+  );
+  expect(after).toBeNull();
+});

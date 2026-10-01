@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
   assertOrgMember,
+  assertOwner,
   assertStaff,
   darajaTimestamp,
   normalizePhone,
@@ -118,6 +119,26 @@ export const saveMpesaCreds = action({
       shortcode,
       passkeyEnc,
     });
+    return null;
+  },
+});
+
+/** Owner: drop the cached Daraja token so the next call mints fresh. */
+export const clearDarajaToken = mutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const caller = await assertOwner(ctx);
+    const row = await ctx.db
+      .query("mpesaCredentials")
+      .withIndex("by_org", (q) => q.eq("orgId", caller.orgId))
+      .first();
+    if (row !== null) {
+      await ctx.db.patch(row._id, {
+        darajaTokenEnc: undefined,
+        darajaTokenExpiresAt: undefined,
+      });
+    }
     return null;
   },
 });

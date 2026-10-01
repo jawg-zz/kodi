@@ -219,10 +219,20 @@ export const storeCreds = internalMutation({
       .query("mpesaCredentials")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .first();
+    // New key/secret (or environment/shortcode) invalidates the cached
+    // OAuth token: it was minted under the old credentials and Daraja
+    // kills it server-side on rotation. Without this, saving credentials
+    // in Settings leaves every call 401ing on a stale token until expiry.
+    // Patching optional fields to undefined clears them in Convex.
+    const withTokenCleared = {
+      ...args,
+      darajaTokenEnc: undefined,
+      darajaTokenExpiresAt: undefined,
+    };
     if (existing === null) {
-      await ctx.db.insert("mpesaCredentials", args);
+      await ctx.db.insert("mpesaCredentials", withTokenCleared);
     } else {
-      await ctx.db.patch(existing._id, args);
+      await ctx.db.patch(existing._id, withTokenCleared);
     }
     return null;
   },
