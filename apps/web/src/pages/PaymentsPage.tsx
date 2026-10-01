@@ -621,6 +621,7 @@ function WebhookCard({ hits, onClose }: {
   hits: WebhookHit[];
   onClose: () => void;
 }) {
+  const [openId, setOpenId] = useState<string | null>(null);
   return (
     <Card className="mb-4">
       <div className="p-4">
@@ -644,19 +645,33 @@ function WebhookCard({ hits, onClose }: {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {hits.slice(0, 50).map((h) => (
-                  <tr key={h.id}>
-                    <td className="py-1 pr-2 text-slate-500">
-                      {new Date(h.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                    </td>
-                    <td className="py-1 pr-2">{h.route}</td>
-                    <td className="py-1 pr-2 font-mono">{h.trans_id ?? "—"}</td>
-                    <td className="py-1 pr-2">
-                      <Badge tone={/matched|success|duplicate/.test(h.outcome) ? "green" : /pending|late/.test(h.outcome) ? "amber" : /error|fail|unknown/.test(h.outcome) ? "red" : "slate"}>
-                        {h.outcome}
-                      </Badge>
-                    </td>
-                    <td className="py-1 text-right text-slate-500">{h.latency_ms ?? "—"}</td>
-                  </tr>
+                  <>
+                    <tr
+                      key={h.id}
+                      className={h.detail ? "cursor-pointer hover:bg-slate-50" : undefined}
+                      onClick={() => h.detail && setOpenId(openId === h.id ? null : h.id)}
+                      title={h.detail ? "Click to expand detail" : undefined}
+                    >
+                      <td className="py-1 pr-2 text-slate-500">
+                        {new Date(h.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                      </td>
+                      <td className="py-1 pr-2">{h.route}</td>
+                      <td className="py-1 pr-2 font-mono">{h.trans_id ?? "—"}</td>
+                      <td className="py-1 pr-2">
+                        <Badge tone={/matched|success|duplicate/.test(h.outcome) ? "green" : /pending|late/.test(h.outcome) ? "amber" : /error|fail|unknown/.test(h.outcome) ? "red" : "slate"}>
+                          {h.outcome}
+                        </Badge>
+                      </td>
+                      <td className="py-1 text-right text-slate-500">{h.latency_ms ?? "—"}</td>
+                    </tr>
+                    {openId === h.id && h.detail && (
+                      <tr key={`${h.id}-detail`}>
+                        <td colSpan={5} className="bg-slate-50 px-2 py-1 font-mono text-[11px] break-all text-slate-600">
+                          {h.detail}
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 ))}
               </tbody>
             </table>
