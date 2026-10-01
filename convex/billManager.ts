@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { assertOrgMember, assertStaff, audit, siteBaseUrl } from "./lib/auth";
 import { cachedDarajaToken, darajaBase } from "./lib/daraja";
 import { encryptSecret } from "./lib/mpesaCrypto";
+import { postCandidates } from "./lib/initiatorJobs";
 
 /** process.env in actions (Node runtime). Declared locally to avoid @types/node. */
 declare const process: { env: Record<string, string | undefined> };
@@ -20,6 +21,52 @@ declare const process: { env: Record<string, string | undefined> };
  */
 
 const BILLMANAGER_BASE = "v1/billmanager-invoice";
+
+/**
+ * Bill Manager POST with the appKey header. postCandidates doesn't take
+ * extra headers, and these calls need per-chunk/per-status handling
+ * anyway — so this helper keeps the raw fetch but translates the two
+ * portal-fix failures (unsubscribed product, wrong path) into the same
+ * plain language the shared caller uses.
+ */
+async function billManagerPost(
+  base: string,
+  token: string,
+  appKey: string,
+  path: string,
+  body: Record<string, unknown>,
+  label: string,
+  timeoutMs = 30_000,
+): Promise<{ status: number; body: string }> {
+  const candidates = [path, `mpesa/${path}`];
+  let last404 = "";
+  for (const p of candidates) {
+    const res = await fetch(`${base}/${p}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        appKey,
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    if (res.status === 404) {
+      last404 = text.slice(0, 160);
+      continue;
+    }
+    if (/no apiproduct match/i.test(text)) {
+      throw new ConvexError(
+        `${label}: your Daraja app isn't subscribed to the Bill Manager product — open the app at developer.safaricom.co.ke, subscribe it, then retry. Keys and shortcode are fine.`,
+      );
+    }
+    return { status: res.status, body: text };
+  }
+  throw new ConvexError(
+    `${label}: no known endpoint path answered (all 404) — ${last404 || "check the Daraja catalogue for a renamed path"}`,
+  );
+}
 
 const billStateShape = v.object({
   optedIn: v.boolean(),
@@ -77,30 +124,38 @@ export const optInBillManager = action({
     if (!siteBase) throw new ConvexError("MPESA_CALLBACK_URL is not set");
     const base = darajaBase(creds.environment);
     const token = await cachedDarajaToken(ctx, args.orgId, creds);
-    const res = await fetch(`${base}/${BILLMANAGER_BASE}/optin`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
+    // Route through the shared caller: Bill Manager opt-in is a sync
+    // endpoint (no job row), but postCandidates gives us the friendly
+    // "app isn't subscribed" error plus the documented-path fallback.
+    const res = await postCandidates(
+      {
+        orgId: args.orgId,
+        environment: creds.environment,
+        base,
+        token,
+        shortcode: creds.shortcode,
+        initiatorName: "",
+        credential: "",
+        siteBase,
       },
-      signal: AbortSignal.timeout(30_000),
-      body: JSON.stringify({
+      [`${BILLMANAGER_BASE}/optin`, `mpesa/${BILLMANAGER_BASE}/optin`],
+      {
         shortcode: creds.shortcode,
         email,
         officialContact: contact,
         sendReminders: args.sendReminders ? 1 : 0,
         callbackurl: `${siteBase}/billmanager-callback`,
-      }),
-    });
-    const raw = await res.text();
+      },
+      "Bill Manager",
+    );
     let data: { app_key?: string; ResponseCode?: string; ResponseDescription?: string } = {};
     try {
-      data = JSON.parse(raw) as typeof data;
+      data = JSON.parse(res.body) as typeof data;
     } catch {
-      throw new ConvexError(`Bill Manager opt-in rejected (HTTP ${res.status}): ${raw.slice(0, 200)}`);
+      throw new ConvexError(`Bill Manager opt-in rejected with a non-JSON reply: ${res.body.slice(0, 200)}`);
     }
     if (!data.app_key) {
-      if (/already|opted/i.test(`${data.ResponseCode} ${data.ResponseDescription ?? raw}`)) {
+      if (/already|opted/i.test(`${data.ResponseCode} ${data.ResponseDescription ?? res.body}`)) {
         await ctx.runMutation(internal.billManagerInternal.markOptedIn, {
           orgId: args.orgId,
           email,
@@ -108,7 +163,7 @@ export const optInBillManager = action({
         return { optedIn: true };
       }
       throw new ConvexError(
-        `Opt-in said no (${data.ResponseCode ?? "?"}): ${(data.ResponseDescription ?? raw).slice(0, 200)}`,
+        `Opt-in said no (${data.ResponseCode ?? "?"}): ${(data.ResponseDescription ?? res.body).slice(0, 200)}`,
       );
     }
     await ctx.runMutation(internal.billManagerInternal.markOptedIn, {
@@ -159,39 +214,50 @@ export const mirrorInvoicesToBillManager = action({
     let failed = 0;
     for (let i = 0; i < targets.invoices.length; i += 1000) {
       const chunk = targets.invoices.slice(i, i + 1000);
-      const res = await fetch(`${base}/${BILLMANAGER_BASE}/bulk-invoicing`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+      let res: { status: number; body: string };
+      try {
+        res = await billManagerPost(
+          base,
+          token,
           appKey,
-        },
-        signal: AbortSignal.timeout(60_000),
-        body: JSON.stringify({
-          bulk: chunk.map(
-            (inv: {
-              invoiceId: string;
-              tenantName: string;
-              phone: string;
-              month: string;
-              dueDate: string;
-              accountCode: string;
-              balance: number;
-              items: Array<{ itemName: string; amount: number }>;
-            }) => ({
-            externalReference: inv.invoiceId,
-            billedFullName: inv.tenantName,
-            billedPhone: inv.phone,
-            billedPeriod: inv.month,
-            invoiceName: `Rent ${inv.month}`,
-            dueDate: inv.dueDate,
-            accountReference: inv.accountCode,
-            amount: inv.balance,
-            invoiceItems: inv.items,
-          })),
-        }),
-      });
-      if (res.ok) {
+          `${BILLMANAGER_BASE}/bulk-invoicing`,
+          {
+            bulk: chunk.map(
+              (inv: {
+                invoiceId: string;
+                tenantName: string;
+                phone: string;
+                month: string;
+                dueDate: string;
+                accountCode: string;
+                balance: number;
+                items: Array<{ itemName: string; amount: number }>;
+              }) => ({
+              externalReference: inv.invoiceId,
+              billedFullName: inv.tenantName,
+              billedPhone: inv.phone,
+              billedPeriod: inv.month,
+              invoiceName: `Rent ${inv.month}`,
+              dueDate: inv.dueDate,
+              accountReference: inv.accountCode,
+              amount: inv.balance,
+              invoiceItems: inv.items,
+            })),
+          },
+          "Bill Manager",
+          60_000,
+        );
+      } catch (e) {
+        failed += chunk.length;
+        await ctx.runMutation(internal.c2b.logWebhookInternal, {
+          orgId: args.orgId,
+          route: "out-billmanager",
+          outcome: "mirror-rejected",
+          detail: e instanceof Error ? e.message.slice(0, 200) : String(e),
+        });
+        continue;
+      }
+      if (res.status >= 200 && res.status < 300) {
         mirrored += chunk.length;
       } else {
         failed += chunk.length;
@@ -199,7 +265,7 @@ export const mirrorInvoicesToBillManager = action({
           orgId: args.orgId,
           route: "out-billmanager",
           outcome: "mirror-rejected",
-          detail: `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
+          detail: `HTTP ${res.status}: ${res.body.slice(0, 200)}`,
         });
       }
     }
@@ -245,22 +311,20 @@ export const cancelBillManagerInvoice = action({
       args.bulk === true
         ? `${BILLMANAGER_BASE}/cancel-bulk-invoice`
         : `${BILLMANAGER_BASE}/cancel-single-invoice`;
-    const res = await fetch(`${base}/${path}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        appKey,
-      },
-      signal: AbortSignal.timeout(30_000),
-      body: JSON.stringify({ externalReference: ref }),
-    });
+    const res = await billManagerPost(
+      base,
+      token,
+      appKey,
+      path,
+      { externalReference: ref },
+      "Bill Manager",
+    );
     if (res.status === 409) {
       throw new ConvexError("Already paid — cancel is rejected once paid");
     }
-    if (!res.ok) {
+    if (res.status < 200 || res.status >= 300) {
       throw new ConvexError(
-        `Cancel rejected (HTTP ${res.status}): ${(await res.text()).slice(0, 200)}`,
+        `Cancel rejected (HTTP ${res.status}): ${res.body.slice(0, 200)}`,
       );
     }
     await ctx.runMutation(internal.billManagerInternal.auditCancel, {
@@ -297,32 +361,27 @@ export const updateBillManagerDetails = action({
     if (creds === null) throw new ConvexError("Save Daraja credentials first");
     const base = darajaBase(creds.environment);
     const token = await cachedDarajaToken(ctx, args.orgId, creds);
-    const res = await fetch(
-      `${base}/${BILLMANAGER_BASE}/change-optin-details`,
+    const res = await billManagerPost(
+      base,
+      token,
+      appKey,
+      `${BILLMANAGER_BASE}/change-optin-details`,
       {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          appKey,
-        },
-        signal: AbortSignal.timeout(30_000),
-        body: JSON.stringify({
-          shortcode: creds.shortcode,
-          email: args.email?.trim() || undefined,
-          officialContact: args.officialContact?.trim() || undefined,
-          sendReminders:
-            args.sendReminders === undefined
-              ? undefined
-              : args.sendReminders
-                ? 1
-                : 0,
-        }),
+        shortcode: creds.shortcode,
+        email: args.email?.trim() || undefined,
+        officialContact: args.officialContact?.trim() || undefined,
+        sendReminders:
+          args.sendReminders === undefined
+            ? undefined
+            : args.sendReminders
+              ? 1
+              : 0,
       },
+      "Bill Manager",
     );
-    if (!res.ok) {
+    if (res.status < 200 || res.status >= 300) {
       throw new ConvexError(
-        `Update rejected (HTTP ${res.status}): ${(await res.text()).slice(0, 200)}`,
+        `Update rejected (HTTP ${res.status}): ${res.body.slice(0, 200)}`,
       );
     }
     return null;
