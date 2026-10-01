@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../lib/auth";
 import {
   ensureMyAccountCode,
+  getInvoiceQr,
   getPaybillInfo,
   getTenantCredit,
   listTenantInvoices,
   listTenantPayments,
+  mintInvoiceQr,
 } from "../lib/api";
 import { stkInitiate, stkStatus } from "../lib/api";
 import type { InvoiceWithRefs, MpesaTransaction, PaybillInfo, PaymentWithRefs } from "../lib/types";
@@ -107,7 +109,7 @@ export function PortalPage() {
               </div>
               <Button onClick={() => setShowPay(true)}>Pay via M-Pesa</Button>
             </div>
-            <PaybillCard tenantId={tenant.id} balance={netOwed} />
+            <PaybillCard tenantId={tenant.id} balance={netOwed} invoiceId={oldest?.id} />
             {tx && tx.status === "pending" && (
               <div className="mt-3 rounded-lg bg-blue-50 p-3 text-sm text-blue-800">
                 A prompt for {formatKES(tx.amount)} was sent to your phone. Enter your M-Pesa PIN to complete it — this page updates automatically.
@@ -270,15 +272,47 @@ export function TenantBadgeCheck() {
  * M-Pesa menu (business number + their account code). Confirmation
  * auto-records — no STK prompt needed, works on any phone.
  */
-function PaybillCard({ tenantId, balance }: { tenantId: string; balance: number }) {
+function PaybillCard({ tenantId, balance, invoiceId }: { tenantId: string; balance: number; invoiceId?: string }) {
   const [info, setInfo] = useState<PaybillInfo | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checkMsg, setCheckMsg] = useState<string | null>(null);
+  const [qr, setQr] = useState<string | null>(null);
+  const [qrAmount, setQrAmount] = useState<number | null>(null);
+  const [qrBusy, setQrBusy] = useState(false);
+  const [qrError, setQrError] = useState<string | null>(null);
 
   useEffect(() => {
     getPaybillInfo(tenantId).then(setInfo).catch(() => setInfo(null));
   }, [tenantId]);
+
+  // Show a scannable QR for the oldest open invoice once the code exists.
+  useEffect(() => {
+    if (invoiceId === undefined || info === null || info === undefined || !info.account_code) return;
+    let alive = true;
+    setQrBusy(true);
+    setQrError(null);
+    getInvoiceQr(invoiceId)
+      .then(async (cached) => {
+        if (!alive) return;
+        if (cached) {
+          setQr(cached.qr_base64);
+          setQrAmount(cached.amount);
+        } else {
+          const fresh = await mintInvoiceQr(invoiceId);
+          if (!alive) return;
+          setQr(fresh.qr_base64);
+          setQrAmount(fresh.amount);
+        }
+      })
+      .catch((e) => {
+        if (alive) setQrError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (alive) setQrBusy(false);
+      });
+    return () => { alive = false; };
+  }, [invoiceId, info?.account_code]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (info === undefined) return null;
   if (info === null) return null;
@@ -349,6 +383,25 @@ function PaybillCard({ tenantId, balance }: { tenantId: string; balance: number 
           <p className="mt-1 text-xs text-slate-500">
             Use your account code so the payment lands on your rent straight away.
           </p>
+          {qrBusy && qr === null && (
+            <p className="mt-2 text-xs text-slate-400">Preparing your payment QR…</p>
+          )}
+          {qr && qrAmount !== null && (
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <img
+                src={`data:image/png;base64,${qr}`}
+                alt="M-Pesa payment QR"
+                className="h-40 w-40 rounded-lg border border-slate-200 bg-white"
+              />
+              <div className="text-xs text-slate-600">
+                <p className="font-medium text-slate-800">Scan to pay {formatKES(qrAmount)}</p>
+                <p>Opens M-Pesa with this bill pre-filled — no typing.</p>
+              </div>
+            </div>
+          )}
+          {qrError && (
+            <p className="mt-2 text-xs text-slate-400">{qrError}</p>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button size="sm" variant="secondary" onClick={checkPaid} disabled={checking}>
               {checking ? "Checking…" : "I have paid — check now"}

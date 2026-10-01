@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { formatDate, formatDateTime, formatKES, monthLabel } from "@kodi/shared";
 import {
   getInvoice,
+  getInvoiceQr,
   getPaybillInfo,
   getPayment,
   getSettlement,
@@ -10,6 +11,7 @@ import {
   getTenantCredit,
   listTenantInvoices,
   listTenantPayments,
+  mintInvoiceQr,
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Loading, ErrorBanner } from "../components/ui";
@@ -78,6 +80,7 @@ export function InvoiceDocPage() {
   const [inv, setInv] = useState<(InvoiceWithRefs & { tenant: (Tenant & { unit_label?: string }) | null }) | null>(null);
   const [orgName, setOrgName] = useState("Kodi");
   const [paybill, setPaybill] = useState<{ shortcode: string; account_code: string } | null>(null);
+  const [qr, setQr] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -91,6 +94,10 @@ export function InvoiceDocPage() {
           const pb = await getPaybillInfo(data.tenant_id);
           if (pb?.registered && pb.account_code) {
             setPaybill({ shortcode: pb.shortcode, account_code: pb.account_code });
+            // QR beside the paybill block: print or scan, exact balance baked in.
+            const cached = await getInvoiceQr(id).catch(() => null);
+            const image = cached ?? (await mintInvoiceQr(id).catch(() => null));
+            if (image) setQr(image.qr_base64);
           }
         } catch {
           // Paybill block is a nicety — the invoice stands without it.
@@ -133,7 +140,19 @@ export function InvoiceDocPage() {
       {paybill && inv.balance > 0 && (
         <div className="mt-3 rounded border border-slate-300 p-3 text-sm">
           <p className="font-semibold">Pay via M-Pesa Paybill</p>
-          <p>Business no: <strong>{paybill.shortcode}</strong> · Account no: <strong>{paybill.account_code}</strong> · Amount: <Money value={inv.balance} className="font-semibold" /></p>
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <p>Business no: <strong>{paybill.shortcode}</strong> · Account no: <strong>{paybill.account_code}</strong> · Amount: <Money value={inv.balance} className="font-semibold" /></p>
+              <p className="mt-1 text-xs text-slate-500">Or scan the code with your phone camera — M-Pesa opens with this bill pre-filled.</p>
+            </div>
+            {qr && (
+              <img
+                src={`data:image/png;base64,${qr}`}
+                alt="M-Pesa payment QR"
+                className="ml-auto h-28 w-28"
+              />
+            )}
+          </div>
         </div>
       )}
     </DocShell>
