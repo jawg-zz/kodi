@@ -207,8 +207,8 @@ export interface C2bStatusView {
 
 // ---------------------------------------------------------------------------
 // Extended Daraja tracks (verify / payouts / billmanager / collect /
-// ratiba / bonga / fraud). Backend: convex/{verify,payouts,billManager,
-// collect,ratiba,bonga,fraud}.ts
+// bonga). Backend: convex/{verify,payouts,billManager,
+// collect,bonga}.ts
 // ---------------------------------------------------------------------------
 export type DarajaJobKind =
   | "txn_status"
@@ -281,32 +281,10 @@ export interface ShortcodeCheck {
   raw: string;
 }
 
-export type MandateStatus = "pending" | "active" | "cancelled";
-
-export interface RatibaMandate {
-  id: string;
-  org_id: string;
-  tenant_id: string;
-  tenant_name?: string | null;
-  mandate_name: string;
-  amount: number;
-  frequency: string;
-  status: MandateStatus;
-  daraja_ref?: string | null;
-  created_at: string;
-}
-
 export interface BongaQuote {
   points: number;
   value_kes: number;
   raw: string;
-}
-
-export interface KycCheck {
-  check_type: string;
-  result: string;
-  detail?: string | null;
-  checked_at: string;
 }
 
 export interface DepositSettlement {

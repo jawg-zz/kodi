@@ -173,13 +173,13 @@ Loyalty points at 0.2 KES/point. `calculate-points` then
 PIN-confirmed STK-style flow; funds land on the Paybill and the C2B
 callback fires on our registered URLs. Kodi: `convex/bonga.ts` quote/redeem + review-queue Bonga buttons + Settings operator card.
 
-### 2.6 Ratiba (standing orders) — LIVE IN KODI (needs contract)
+### 2.6 Ratiba (standing orders) — NOT INTEGRATED (commercial fees; skipped)
 
 Commercial API: `POST standingorder/v1/createStandingOrderExternal`.
 Tenant PIN-consents once; debits recur (Frequency 5 = Monthly).
 Account ref ≤ 12, names unique per customer (1050 on clash), masked
 MSISDN callbacks. Pricing ~5% capped 5 KES/execution + C2B tariffs.
-Kodi: `convex/ratiba.ts` mandate tracking (create/amend/cancel/confirm) + tenant-page Mandates card.
+Removed: per-execution commercial fees + signed agreement required — not justified for rent collection.
 
 ### 2.7 C2B Hakikisha — HOST LIVE IN KODI (needs onboarding)
 
@@ -272,21 +272,21 @@ receipt. Needs Org Reversals Initiator. B2C outbound reversals
 unsupported (portal only).
 Kodi: `convex/payouts.ts` reverseDarajaPayment + receipt Reverse-at-Daraja button; completion auto-voids.
 
-### 4.5 Mobile Number Validation (KYC) — LIVE IN KODI
+### 4.5 Mobile Number Validation (KYC) — NOT INTEGRATED (per-call fee; skipped)
 
 `POST v1/KYC-validation/validateID`: phone + idType
 (01 NationalID / 02 Military / 05 Passport) + idNumber → TRUE/FALSE,
 no PII. Commercial ~4.5 KES tapering. Needs apisupport onboarding.
-Kodi: `convex/fraud.ts` validateTenantId + tenant-page KYC card (cached).
+Removed: ~4.5 KES/call commercial fee — the national-ID matching fallback covers this.
 
-### 4.6 SIM Swap / IMSI / Age on Network — LIVE IN KODI (fraud trio)
+### 4.6 SIM Swap / IMSI / Age on Network — NOT INTEGRATED (commercial fees; skipped)
 
 - Swap `imsi/v2/checkATI`: last swap date (>3mo → 1900-01-01). 50k KES
   connection, 200k free, 1 KES/req.
 - IMSI V1/V2/V3: hashed IMSI + age + swap bundles. 20 KES/call.
 - Age `registration/lookup/v1/checkATI`: SIM registration date,
   ~4 KES tapering, failed calls unbilled.
-Kodi: `convex/fraud.ts` checkSimSwap/checkSimAge/checkImsi + tenant-page KYC card (cached).
+Removed: commercial fees (50k KES SIM-swap connection, 20 KES IMSI, ~4 KES age) — risk engine relies on C2B anomaly alerts instead.
 
 ### 4.7 B2B Hakikisha (QueryOrgInfo) — LIVE IN KODI (setup guard)
 

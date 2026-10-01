@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { cachedDarajaToken, darajaBase } from "./lib/daraja";
 import { postCandidates } from "./lib/initiatorJobs";
+import { encryptSecret } from "./lib/mpesaCrypto";
 
 /**
  * Lipa na Bonga: tenants part-pay rent with loyalty points (0.2 KES/pt).
@@ -179,5 +180,30 @@ export const redeemBongaPoints = action({
       detail: `${pts} pts (~${Math.round(pts * 0.2)} KES) → ${tenant.fullName}`.slice(0, 200),
     });
     return { raw: res.body.slice(0, 500) };
+  },
+});
+
+/** Owner: store Bonga operator creds (Settings → Lipa na Bonga card). */
+export const saveBongaCreds = action({
+  args: {
+    orgId: v.id("orgs"),
+    username: v.string(),
+    password: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const caller = await ctx.runQuery(internal.helpers.assertOwner, {});
+    if (caller.orgId !== args.orgId) {
+      throw new ConvexError("Not a member of this organization");
+    }
+    if (!args.username.trim() || !args.password) {
+      throw new ConvexError("Bonga username and password are required");
+    }
+    await ctx.runMutation(internal.bongaInternal.storeBongaCreds, {
+      orgId: args.orgId,
+      usernameEnc: await encryptSecret(args.username.trim()),
+      passwordEnc: await encryptSecret(args.password),
+    });
+    return null;
   },
 });

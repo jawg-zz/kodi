@@ -22,7 +22,6 @@ import type {
   Invoice,
   InvoiceQr,
   InvoiceWithRefs,
-  KycCheck,
   MpesaHealth,
   MpesaTransaction,
   Org,
@@ -32,7 +31,6 @@ import type {
   PaymentsBreakdown,
   PaymentWithRefs,
   Property,
-  RatibaMandate,
   RentRoll,
   SettlementPayout,
   ShortcodeCheck,
@@ -1057,7 +1055,7 @@ export async function setValidationMode(
 
 // ---------------------------------------------------------------------------
 // Extended Daraja tracks: initiator, verify, payouts, bill manager,
-// QR/shortcode check, Ratiba, Bonga, fraud. Translators stay snake_case.
+// QR/shortcode check, Bonga. Translators stay snake_case.
 // ---------------------------------------------------------------------------
 function toDarajaJob(r: any): DarajaJob {
   return {
@@ -1458,101 +1456,9 @@ export async function verifyShortcodeOwner(args: {
   }
 }
 
-function toMandate(r: any): RatibaMandate {
-  return {
-    id: r._id,
-    org_id: r.orgId,
-    tenant_id: r.tenantId,
-    tenant_name: r.tenantName ?? null,
-    mandate_name: r.mandateName,
-    amount: r.amount,
-    frequency: r.frequency,
-    status: r.status,
-    daraja_ref: r.darajaRef ?? null,
-    created_at: iso(r._creationTime),
-  };
-}
-
-export async function listMandates(tenantId: string): Promise<RatibaMandate[]> {
-  try {
-    const rows = (await convex.query((api as any).ratiba.listMandates, {
-      tenantId,
-    })) as any[];
-    return rows.map(toMandate);
-  } catch (e) {
-    return err(e);
-  }
-}
-
-export async function createMandate(args: {
-  orgId: string;
-  tenantId: string;
-  mandateName: string;
-  amount: number;
-  phone: string;
-  frequency?: string;
-  startDate?: string;
-  endDate?: string;
-}): Promise<{ mandate_id: string; conversation_id: string }> {
-  try {
-    const row = (await convex.action((api as any).ratiba.createMandate, args)) as any;
-    return { mandate_id: row.mandateId, conversation_id: row.conversationId };
-  } catch (e) {
-    return err(e);
-  }
-}
-
-export async function cancelMandate(
-  mandateId: string,
-): Promise<{ conversation_id: string }> {
-  try {
-    const row = (await convex.action((api as any).ratiba.cancelMandate, {
-      mandateId,
-    })) as any;
-    return { conversation_id: row.conversationId };
-  } catch (e) {
-    return err(e);
-  }
-}
-
-export async function confirmMandate(mandateId: string): Promise<void> {
-  try {
-    await convex.mutation((api as any).ratiba.confirmMandate, { mandateId });
-  } catch (e) {
-    return err(e);
-  }
-}
-
-export async function amendMandate(args: {
-  mandateId: string;
-  amount?: number;
-  endDate?: string;
-}): Promise<{ conversation_id: string }> {
-  try {
-    const row = (await convex.action((api as any).ratiba.amendMandate, args)) as any;
-    return { conversation_id: row.conversationId };
-  } catch (e) {
-    return err(e);
-  }
-}
-
 export async function noteJob(jobId: string, note: string): Promise<void> {
   try {
     await convex.mutation((api as any).darajaJobs.noteJob, { jobId, note });
-  } catch (e) {
-    return err(e);
-  }
-}
-
-export async function checkImsi(
-  orgId: string,
-  tenantId: string,
-): Promise<{ result: string; detail: string }> {
-  try {
-    return (await convex.action((api as any).fraud.checkImsi, {
-      orgId,
-      tenantId,
-    })) as { result: string; detail: string };
   } catch (e) {
     return err(e);
   }
@@ -1650,65 +1556,7 @@ export async function saveBongaCreds(args: {
   password: string;
 }): Promise<void> {
   try {
-    await convex.action((api as any).fraud.saveBongaCreds, args);
-  } catch (e) {
-    return err(e);
-  }
-}
-
-export async function validateTenantId(
-  orgId: string,
-  tenantId: string,
-): Promise<{ result: string; detail: string }> {
-  try {
-    return (await convex.action((api as any).fraud.validateTenantId, {
-      orgId,
-      tenantId,
-    })) as { result: string; detail: string };
-  } catch (e) {
-    return err(e);
-  }
-}
-
-export async function checkSimSwap(
-  orgId: string,
-  tenantId: string,
-): Promise<{ result: string; detail: string }> {
-  try {
-    return (await convex.action((api as any).fraud.checkSimSwap, {
-      orgId,
-      tenantId,
-    })) as { result: string; detail: string };
-  } catch (e) {
-    return err(e);
-  }
-}
-
-export async function checkSimAge(
-  orgId: string,
-  tenantId: string,
-): Promise<{ result: string; detail: string }> {
-  try {
-    return (await convex.action((api as any).fraud.checkSimAge, {
-      orgId,
-      tenantId,
-    })) as { result: string; detail: string };
-  } catch (e) {
-    return err(e);
-  }
-}
-
-export async function getKycChecks(tenantId: string): Promise<KycCheck[]> {
-  try {
-    const rows = (await convex.query((api as any).fraud.getKycChecks, {
-      tenantId,
-    })) as any[];
-    return rows.map((r: any) => ({
-      check_type: r.checkType,
-      result: r.result,
-      detail: r.detail ?? null,
-      checked_at: iso(r.checkedAt),
-    }));
+    await convex.action((api as any).bonga.saveBongaCreds, args);
   } catch (e) {
     return err(e);
   }

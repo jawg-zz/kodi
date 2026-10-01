@@ -5,15 +5,12 @@ import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import * as c2b from "./c2b";
 import * as darajaJobs from "./darajaJobs";
-import * as fraud from "./fraud";
 import * as verifyInternal from "./verifyInternal";
 import * as payoutsInternal from "./payoutsInternal";
 import * as billManager from "./billManager";
 import * as billManagerInternal from "./billManagerInternal";
 import * as collectInternal from "./collectInternal";
-import * as ratibaInternal from "./ratibaInternal";
 import * as bongaInternal from "./bongaInternal";
-import * as fraudInternal from "./fraudInternal";
 import * as hakikishaInternal from "./hakikishaInternal";
 import * as reconcileInternal from "./reconcileInternal";
 import * as mpesaInternal from "./mpesaInternal";
@@ -26,15 +23,12 @@ const modules = {
   "./_generated/api.js": () => Promise.resolve({}),
   "./c2b.js": () => Promise.resolve(c2b),
   "./darajaJobs.js": () => Promise.resolve(darajaJobs),
-  "./fraud.js": () => Promise.resolve(fraud),
   "./verifyInternal.js": () => Promise.resolve(verifyInternal),
   "./payoutsInternal.js": () => Promise.resolve(payoutsInternal),
   "./billManager.js": () => Promise.resolve(billManager),
   "./billManagerInternal.js": () => Promise.resolve(billManagerInternal),
   "./collectInternal.js": () => Promise.resolve(collectInternal),
-  "./ratibaInternal.js": () => Promise.resolve(ratibaInternal),
   "./bongaInternal.js": () => Promise.resolve(bongaInternal),
-  "./fraudInternal.js": () => Promise.resolve(fraudInternal),
   "./hakikishaInternal.js": () => Promise.resolve(hakikishaInternal),
   "./reconcileInternal.js": () => Promise.resolve(reconcileInternal),
   "./mpesaInternal.js": () => Promise.resolve(mpesaInternal),
@@ -310,44 +304,6 @@ test("QR store/read round-trips per invoice", async () => {
   );
   expect(inv).toMatchObject({ balance: 20800, accountCode: "GC-A1" });
 });
-
-// --- Ratiba mandates ---
-
-test("mandate open → patch → cancel lifecycle", async () => {
-  const t = convexTest(schema, modules);
-  const { orgId } = await seedOrg(t);
-  const { tenantId } = await seedTenant(t, orgId);
-  const mandateId: Id<"ratibaMandates"> = await t.run(async (ctx) =>
-    ctx.runMutation(internal.ratibaInternal.openMandate, {
-      orgId,
-      tenantId,
-      mandateName: "RENT-A1",
-      amount: 20800,
-      frequency: "5",
-    }),
-  );
-  const m = await t.run(async (ctx) =>
-    ctx.runQuery(internal.ratibaInternal.getMandate, { mandateId }),
-  );
-  expect(m?.mandateName).toBe("RENT-A1");
-  await t.run(async (ctx) =>
-    ctx.runMutation(internal.ratibaInternal.linkMandateJob, {
-      mandateId,
-      conversationId: "B2B-M1",
-    }),
-  );
-  await t.run(async (ctx) =>
-    ctx.runMutation(internal.ratibaInternal.patchMandate, {
-      mandateId,
-      status: "cancelled",
-    }),
-  );
-  const after = await t.run(async (ctx) =>
-    ctx.runQuery(internal.ratibaInternal.getMandate, { mandateId }),
-  );
-  expect(after?.status).toBe("cancelled");
-});
-
 // --- Bill Manager ingest ---
 
 test("bill manager ingest matches by account, dedupes transactionId", async () => {
@@ -411,33 +367,6 @@ test("bill manager ingest parks unknown refs in review", async () => {
     }),
   );
   expect(res.status).toBe("pending_review");
-});
-
-// --- fraud checks + bonga creds ---
-
-test("fraud check store + tenant identity read", async () => {
-  const t = convexTest(schema, modules);
-  const { orgId, asStaff } = await seedOrg(t);
-  const { tenantId } = await seedTenant(t, orgId);
-  const ident = await t.run(async (ctx) =>
-    ctx.runQuery(internal.fraudInternal.getTenantIdentity, {
-      tenantId,
-      orgId,
-    }),
-  );
-  expect(ident).toMatchObject({ phone: "254700000001", fullName: "Jane Tenant" });
-  await t.run(async (ctx) =>
-    ctx.runMutation(internal.fraudInternal.storeCheck, {
-      orgId,
-      tenantId,
-      checkType: "sim_swap",
-      result: "STABLE",
-      detail: "No recent swap",
-    }),
-  );
-  const checks = await asStaff.query(api.fraud.getKycChecks, { tenantId });
-  expect(checks.length).toBe(1);
-  expect(checks[0]).toMatchObject({ checkType: "sim_swap", result: "STABLE" });
 });
 
 test("bonga creds fail closed when unset, round-trip when set", async () => {

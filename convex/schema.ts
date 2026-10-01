@@ -429,46 +429,6 @@ export default defineSchema({
     .index("by_invoice", ["invoiceId"])
     .index("by_org", ["orgId"]),
 
-  /**
-   * Ratiba standing-order mandates: tenant authorizes once, executions
-   * arrive as C2B hits against the mandate's account reference.
-   */
-  ratibaMandates: defineTable({
-    orgId: v.id("orgs"),
-    tenantId: v.id("tenants"),
-    mandateName: v.string(),
-    amount: v.number(),
-    frequency: v.string(),
-    status: v.union(
-      v.literal("pending"),
-      v.literal("active"),
-      v.literal("cancelled"),
-    ),
-    darajaRef: v.optional(v.string()),
-  })
-    .index("by_org", ["orgId"])
-    .index("by_tenant", ["tenantId"]),
-
-  /**
-   * KYC / fraud-signal checks per tenant: national-ID validation, SIM swap
-   * date, SIM age, IMSI bundle. Cached so repeat views don't rebill.
-   */
-  kycChecks: defineTable({
-    orgId: v.id("orgs"),
-    tenantId: v.id("tenants"),
-    checkType: v.union(
-      v.literal("mobile_validation"),
-      v.literal("sim_swap"),
-      v.literal("sim_age"),
-      v.literal("imsi"),
-    ),
-    result: v.string(),
-    detail: v.optional(v.string()),
-    checkedAt: v.number(),
-  })
-    .index("by_tenant_type", ["tenantId", "checkType"])
-    .index("by_org", ["orgId"]),
-
   tenantCredits: defineTable({
     orgId: v.id("orgs"),
     tenantId: v.id("tenants"),

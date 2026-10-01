@@ -45,7 +45,7 @@ Purpose: what each API does, exact versions/paths observed, and Kodi relevance.
 - calculate-points + redeem-paybill (`v1/lipa/na/bonga/*`), 0.2 KES/point, PIN-auth STK-style flow, funds land on Paybill → C2B callback to our URLs. Own SHA256 user/pass auth.
 - Kodi fit: part-pay rent with points; confirmations reuse C2B path.
 
-### 1.6 Ratiba (standing orders) — LIVE IN KODI
+### 1.6 Ratiba (standing orders) — NOT INTEGRATED (commercial fees; skipped)
 - `standingorder/v1/createStandingOrderExternal`. Commercial: signed agreement, 5% capped 5 KES/execution + C2B tariffs.
 - PIN-consent mandate creation, Frequency 5=Monthly, account ref ≤12, unique names/customer (1050), masked MSISDN callbacks.
 - Kodi fit: tenant authorizes monthly rent once; executions arrive as C2B. Needs mandate tracking (create/amend/cancel).
@@ -97,11 +97,11 @@ Purpose: what each API does, exact versions/paths observed, and Kodi relevance.
 - `mpesa/reversal/v1/request`, C2B-only, receipt as TransactionID, ReceiverParty + id 11, R000001 already-reversed / R000002 invalid. Needs Org Reversals Initiator.
 - Kodi fit: staff-initiated reversals from the receipt page (duplicate debits refunded without shop visits). B2C outbound reversals unsupported — portal only.
 
-### 3.5 Mobile Number Validation (KYC) — LIVE IN KODI
+### 3.5 Mobile Number Validation (KYC) — NOT INTEGRATED (per-call fee; skipped)
 - `v1/KYC-validation/validateID`: phone + idType (01/02/05) + idNumber → TRUE/FALSE, no PII returned. Commercial ~4.5 KES tapering.
 - Kodi fit: authoritative check behind national-ID fallback + onboarding verification.
 
-### 3.6 SIM Swap / IMSI / Age on Network — LIVE IN KODI (fraud trio)
+### 3.6 SIM Swap / IMSI / Age on Network — NOT INTEGRATED (commercial fees; skipped)
 - Swap `imsi/v2/checkATI`: last swap date (>3mo → 1900-01-01). 50k connection, 200k free, 1 KES/req.
 - IMSI V1/V2/V3: hashed IMSI + age + swap bundles (V2 age-only). 20 KES/call.
 - Age `registration/lookup/v1/checkATI`: SIM registration date, ~4 KES tapering, unsuccessful calls unbilled.
