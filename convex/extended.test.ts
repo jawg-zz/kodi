@@ -710,3 +710,30 @@ test("postCandidates surfaces the second 401 instead of looping", async () => {
     globalThis.fetch = origFetch;
   }
 });
+
+test("postCandidates accepts zero-padded success codes (QR 00)", async () => {
+  const { postCandidates } = await import("./lib/initiatorJobs");
+  const bundle = {
+    orgId: "org1",
+    environment: "sandbox",
+    base: "https://sandbox.safaricom.co.ke",
+    token: "tok",
+    shortcode: "174379",
+    initiatorName: "",
+    credential: "",
+    siteBase: "",
+  } as never;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({ ResponseCode: "00", ResponseDescription: "Successfully Generated", QRCode: "aGVsbG8=" }),
+      { status: 200 },
+    )) as typeof fetch;
+  try {
+    const res = await postCandidates(bundle, ["mpesa/qrcode/v1/generate"], {}, "Dynamic QR");
+    expect(res.responseCode).toBe("00");
+    expect(res.body).toContain("aGVsbG8=");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

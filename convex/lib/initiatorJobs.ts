@@ -188,6 +188,11 @@ export async function postCandidates(
       );
     }
     const code = String(data["ResponseCode"] ?? data["responseCode"] ?? "");
+    // Success-code family: Daraja uses "0" on most APIs but zero-padded
+    // variants ("00") on others (QR: "00 / Successfully Generated").
+    // Numeric comparison accepts both without whitelisting each variant.
+    const codeNum = Number(code);
+    const isSuccessCode = code !== "" && Number.isFinite(codeNum) && codeNum === 0;
     // JSON without any response code on a 2xx is also a bare success
     // (e.g. `{app_key: ...}` opt-in bodies) — don't demand a "0".
     if (code === "" && res.status >= 200 && res.status < 300) {
@@ -199,7 +204,7 @@ export async function postCandidates(
         body: raw.slice(0, 2000),
       };
     }
-    if (code !== "0") {
+    if (!isSuccessCode) {
       // Gateway envelope (Bill Manager family): {requestId, errorCode,
       // errorMessage} with no ResponseCode field. Map it into the same
       // shape so the message below reads the real reason.
