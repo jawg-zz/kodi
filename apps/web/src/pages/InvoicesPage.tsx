@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { addMonths, currentMonthKey, monthLabel } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
-import { generateInvoices, getInvoiceQr, listInvoices, listTenants, mintInvoiceQr, updateInvoice } from "../lib/api";
+import { generateInvoices, getInvoice, getInvoiceQr, getPaybillInfo, listInvoices, listTenants, mintInvoiceQr, updateInvoice } from "../lib/api";
 import type { InvoiceQr, InvoiceWithRefs, Tenant } from "../lib/types";
+import { downloadQr, shareQrImage, whatsappTextLink } from "../lib/share";
 import { Button } from "../components/Button";
 import { Field, Input, Select } from "../components/Field";
 import { Card, EmptyState, ErrorBanner, Loading, PageHeader } from "../components/ui";
@@ -316,13 +317,18 @@ export function EditInvoiceModal({ invoice, tenantName, onClose, onSaved }: {
 /** Per-invoice Dynamic QR: tenant scans with the M-Pesa app, no typing. */
 function QrButton({ invoiceId }: { invoiceId: string }) {
   const [qr, setQr] = useState<InvoiceQr | null>(null);
+  const [paybillNo, setPaybillNo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [shareState, setShareState] = useState<"idle" | "unsupported" | "failed">("idle");
+  const [shared, setShared] = useState(false);
 
   const show = async () => {
     setBusy(true);
     setError(null);
+    setShareState("idle");
+    setShared(false);
     try {
       const cached = await getInvoiceQr(invoiceId).catch(() => null);
       if (cached) {
@@ -330,11 +336,38 @@ function QrButton({ invoiceId }: { invoiceId: string }) {
       } else {
         setQr(await mintInvoiceQr(invoiceId));
       }
+      // Caption needs the paybill number; fail soft — share still works.
+      getInvoice(invoiceId)
+        .then((inv) => (inv ? getPaybillInfo(inv.tenant_id) : null))
+        .then((pb) => setPaybillNo(pb?.shortcode ?? null))
+        .catch(() => setPaybillNo(null));
       setOpen(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const caption = qr
+    ? `Rent payment: M-Pesa Paybill${paybillNo ? ` ${paybillNo}` : ""}, account ${qr.ref_no}, amount ${qr.amount.toLocaleString("en-US")} KES. Scan the QR or use these details.`
+    : "";
+
+  const doShare = async () => {
+    if (!qr) return;
+    setShareState("idle");
+    const result = await shareQrImage({
+      qrBase64: qr.qr_base64,
+      fileName: `rent-qr-${qr.ref_no}.png`,
+      title: `Rent QR — ${qr.ref_no}`,
+      text: caption,
+    });
+    if (result === "shared") {
+      setShared(true);
+    } else if (result === "unsupported") {
+      setShareState("unsupported");
+    } else {
+      setShareState("failed");
     }
   };
 
@@ -355,7 +388,35 @@ function QrButton({ invoiceId }: { invoiceId: string }) {
               Scan with the M-Pesa app — Paybill with account <strong>{qr.ref_no}</strong> for{" "}
               <strong>{qr.amount.toLocaleString("en-US")} KES</strong>.
             </p>
-            <div><Button variant="secondary" onClick={() => setOpen(false)}>Close</Button></div>
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button onClick={doShare}>Share to WhatsApp</Button>
+              <Button variant="secondary" onClick={() => downloadQr(qr.qr_base64, `rent-qr-${qr.ref_no}.png`)}>
+                Download
+              </Button>
+              <Button variant="secondary" onClick={() => setOpen(false)}>Close</Button>
+            </div>
+            {shared && <p className="text-xs text-green-700">Shared — the QR image and paybill details went with it.</p>}
+            {shareState === "unsupported" && (
+              <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+                <p>This browser can't share images directly. Send the caption instead and attach the downloaded QR:</p>
+                <div className="mt-2 flex flex-wrap justify-center gap-2">
+                  <a
+                    href={whatsappTextLink(caption)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700"
+                  >
+                    Open WhatsApp with caption
+                  </a>
+                  <Button size="sm" variant="secondary" onClick={() => downloadQr(qr.qr_base64, `rent-qr-${qr.ref_no}.png`)}>
+                    Download QR
+                  </Button>
+                </div>
+              </div>
+            )}
+            {shareState === "failed" && (
+              <p className="text-xs text-red-700">Share failed — use Download and attach it manually.</p>
+            )}
           </div>
         </Modal>
       )}
