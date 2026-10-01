@@ -171,15 +171,6 @@ export const optInBillManager = action({
       throw new ConvexError(`Bill Manager opt-in rejected with a non-JSON reply: ${res.body.slice(0, 200)}`);
     }
     if (!data.app_key) {
-      // TEMP-DEBUG: log the full raw body so we can see the gateway's
-      // actual field shape (requestId/errorCode/errorMessage vs the
-      // ResponseCode envelope). Remove once parsed.
-      await ctx.runMutation(internal.c2b.logWebhookInternal, {
-        orgId: args.orgId,
-        route: "out-billmanager",
-        outcome: "optin-debug-raw",
-        detail: res.body.slice(0, 500),
-      });
       if (/already|opted/i.test(`${data.ResponseCode} ${data.ResponseDescription ?? res.body}`)) {
         await ctx.runMutation(internal.billManagerInternal.markOptedIn, {
           orgId: args.orgId,

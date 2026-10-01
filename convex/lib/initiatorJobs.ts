@@ -187,7 +187,11 @@ export async function postCandidates(
           `${label}: your Daraja app isn't subscribed to this API product — open the app at developer.safaricom.co.ke, subscribe it to the ${label} product, then retry. Keys and shortcode are fine.`,
         );
       }
-      throw new ConvexError(`${label} said no (${code}): ${desc}`);
+      // TEMP-DEBUG: include the raw body so the gateway's actual field
+      // shape is visible in the UI error. Remove once parsed.
+      throw new ConvexError(
+        `${label} said no (${code || `HTTP ${res.status}`}): ${desc} | raw: ${raw.slice(0, 300)}`,
+      );
     }
     const conv = data["ConversationID"] ?? data["OriginatorConversationID"];
     return {
