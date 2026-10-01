@@ -151,6 +151,15 @@ export async function postCandidates(
           data["errorMessage"] ??
           raw.slice(0, 300),
       );
+      // "no apiproduct match" means the Daraja app isn't subscribed to the
+      // product behind this endpoint — a portal fix, not a code bug. Say
+      // so plainly: the raw message ("Invalid Access Token") misleads
+      // operators into re-entering keys that are actually fine.
+      if (/no apiproduct match/i.test(`${desc} ${raw.slice(0, 300)}`)) {
+        throw new ConvexError(
+          `${label}: your Daraja app isn't subscribed to this API product — open the app at developer.safaricom.co.ke, subscribe it to the ${label} product, then retry. Keys and shortcode are fine.`,
+        );
+      }
       throw new ConvexError(`${label} said no (${code}): ${desc}`);
     }
     const conv = data["ConversationID"] ?? data["OriginatorConversationID"];
