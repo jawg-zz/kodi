@@ -372,7 +372,8 @@ export const cancelBillManagerInvoice = action({
       path,
       { externalReference: ref },
       "Bill Manager",
-    { refreshToken: () => mintFreshDarajaToken(ctx, args.orgId, creds) },
+      30_000,
+      { refreshToken: () => mintFreshDarajaToken(ctx, args.orgId, creds) },
     );
     if (res.status === 409) {
       throw new ConvexError("Already paid — cancel is rejected once paid");
@@ -433,7 +434,8 @@ export const updateBillManagerDetails = action({
               : 0,
       },
       "Bill Manager",
-    { refreshToken: () => mintFreshDarajaToken(ctx, args.orgId, creds) },
+      30_000,
+      { refreshToken: () => mintFreshDarajaToken(ctx, args.orgId, creds) },
     );
     if (res.status < 200 || res.status >= 300) {
       throw new ConvexError(
@@ -514,7 +516,8 @@ export const acknowledgeBillManagerPayment = action({
         externalReference: args.ack.externalReference,
       },
       "Bill Manager",
-    { refreshToken: () => mintFreshDarajaToken(ctx, args.orgId, creds) },
+      30_000,
+      { refreshToken: () => mintFreshDarajaToken(ctx, args.ack.orgId, creds) },
     );
     let msg = `HTTP ${res.status}`;
     try {
