@@ -101,7 +101,7 @@ export function PropertiesPage() {
     <div>
       <PageHeader
         title="Properties"
-        sub={`${properties.length} properties · ${unitCount}/${plan.maxUnits} units on ${plan.name}`}
+        sub={`${properties.length} propert${properties.length === 1 ? "y" : "ies"}, ${unitCount}/${plan.maxUnits} units on ${plan.name}`}
         actions={
           <Button onClick={() => { setEditingProperty(null); setShowPropertyModal(true); }}>
             Add property
@@ -132,7 +132,7 @@ export function PropertiesPage() {
                     <div>
                       <h2 className="text-lg font-semibold">{p.name}</h2>
                       <p className="text-sm text-slate-500">
-                        {p.location || "No location"} · {pu.length} units
+                        {p.location || "No location"}, {pu.length} unit{pu.length === 1 ? "" : "s"}
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -148,7 +148,7 @@ export function PropertiesPage() {
                       <Button size="sm" variant="secondary" onClick={() => { setEditingProperty(p); setShowPropertyModal(true); }}>
                         Edit
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setConfirmDelete({ kind: "property", id: p.id, name: p.name })}>
+                      <Button size="sm" variant="ghost" className="text-red-600 hover:bg-red-50" onClick={() => setConfirmDelete({ kind: "property", id: p.id, name: p.name })}>
                         Delete
                       </Button>
                     </div>
@@ -182,7 +182,7 @@ export function PropertiesPage() {
                             <Button size="sm" variant="ghost" onClick={() => { setEditingUnit(u); setShowUnitModal(p); }}>
                               Edit
                             </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setConfirmDelete({ kind: "unit", id: u.id, name: `${p.name} ${u.label}` })}>
+                            <Button size="sm" variant="ghost" className="text-red-600 hover:bg-red-50" onClick={() => setConfirmDelete({ kind: "unit", id: u.id, name: `${p.name} ${u.label}` })}>
                               Delete
                             </Button>
                           </div>

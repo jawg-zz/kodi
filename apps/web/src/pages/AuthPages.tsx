@@ -46,7 +46,7 @@ export function LoginPage() {
             <button
               type="button"
               onClick={() => navigate("/signup")}
-              className="font-medium text-brand-600 hover:underline"
+              className="font-medium text-slate-700 underline underline-offset-2 hover:text-slate-900 hover:no-underline"
             >
               Create an account
             </button>
@@ -95,7 +95,7 @@ export function SignupPage() {
             Already have an account?{" "}
             <Link
               to="/login"
-              className="font-medium text-brand-600 hover:underline"
+              className="font-medium text-slate-700 underline underline-offset-2 hover:text-slate-900 hover:no-underline"
             >
               Sign in
             </Link>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { currentMonthKey, formatKES, monthLabel, parseKES } from "@kodi/shared";
+import { currentMonthKey, formatDate, formatKES, monthLabel, parseKES } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import {
   applyCreditNow,
@@ -28,7 +28,7 @@ import type {
 import { Button } from "../components/Button";
 import { Field, Input, Textarea } from "../components/Field";
 import { Badge, Card, CardBody, ErrorBanner, Loading, PageHeader } from "../components/ui";
-import { Modal } from "../components/Modal";
+import { Modal, XIcon } from "../components/Modal";
 import { InvoiceStatusBadge, Money, PaymentStatusBadge } from "../components/domain";
 import { MpesaCollectModal } from "../components/MpesaCollectModal";
 import { RecordPaymentFields } from "../components/RecordPaymentForm";
@@ -139,10 +139,10 @@ export function TenantDetailPage() {
     <div>
       <PageHeader
         title={tenant.full_name}
-        sub={`${unit ? `Unit ${unit.label}` : "No unit assigned"} · since ${tenant.move_in_date ?? "—"}`}
+        sub={`${unit ? `Unit ${unit.label}` : "No unit assigned"}, tenant since ${tenant.move_in_date ?? "—"}`}
         actions={
           <>
-            <Button variant="secondary" onClick={() => setShowCollect(true)}>Collect via M-Pesa</Button>
+            <Button variant="mpesa" onClick={() => setShowCollect(true)}>Collect via M-Pesa</Button>
             <Button variant="secondary" onClick={() => openRecord()}>Record payment</Button>
             <Button variant="secondary" onClick={() => setShowEdit(true)}>Edit</Button>
           </>
@@ -157,7 +157,7 @@ export function TenantDetailPage() {
               {formatKES(netOwed)}
             </p>
             <p className="mt-1 text-xs text-slate-500">
-              {netOwed > 0 ? `owed${oldest ? ` · oldest: ${monthLabel(oldest.month)}` : ""}` : credit > 0 ? "fully paid up — credit held" : "fully paid up"}
+              {netOwed > 0 ? `owed${oldest ? `, oldest: ${monthLabel(oldest.month)}` : ""}` : credit > 0 ? "fully paid up — credit held" : "fully paid up"}
             </p>
             {credit > 0 && (
               <>
@@ -169,7 +169,7 @@ export function TenantDetailPage() {
                     {creditBusy ? "Applying…" : "Apply credit now"}
                   </Button>
                 </div>
-                {creditMsg && <p className="mt-1 text-xs text-green-700">{creditMsg}</p>}
+                {creditMsg && <p className="mt-1 text-xs font-medium text-brand-700">{creditMsg}</p>}
                 {ledger.length > 0 && (
                   <details className="mt-2 text-xs text-slate-500">
                     <summary className="cursor-pointer font-medium text-slate-600">Credit history ({ledger.length})</summary>
@@ -178,7 +178,7 @@ export function TenantDetailPage() {
                         <li key={l.id} className="flex justify-between gap-2">
                           <span>
                             {l.kind === "created" ? "Overpayment" : l.kind === "applied" ? "Applied" : "Reversed"}
-                            {l.note ? ` · ${l.note}` : ""}
+                            {l.note ? `, ${l.note}` : ""}
                           </span>
                           <span className={l.amount >= 0 ? "text-brand-600" : ""}>{formatKES(l.amount)}</span>
                         </li>
@@ -199,7 +199,7 @@ export function TenantDetailPage() {
               <p>
                 <span className="text-slate-500">Paybill account:</span>{" "}
                 {tenant.account_code ? (
-                  <strong>{tenant.account_code}</strong>
+                  <strong className="font-mono tracking-wide">{tenant.account_code}</strong>
                 ) : (
                   <button
                     onClick={async () => {
@@ -210,7 +210,7 @@ export function TenantDetailPage() {
                         setError(e instanceof Error ? e.message : String(e));
                       }
                     }}
-                    className="font-medium text-brand-600 hover:underline"
+                    className="font-medium text-slate-600 underline underline-offset-2 hover:text-slate-900 hover:no-underline"
                   >
                     Assign code
                   </button>
@@ -245,7 +245,7 @@ export function TenantDetailPage() {
               <p className="text-sm text-slate-500">
                 No invoices yet.{" "}
                 <button
-                  className="font-medium text-brand-600 hover:underline"
+                  className="font-medium text-slate-700 underline underline-offset-2 hover:text-slate-900"
                   onClick={async () => {
                     await generateInvoices(org!.id, currentMonthKey());
                     await load();
@@ -256,9 +256,9 @@ export function TenantDetailPage() {
               </p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="rtable w-full text-sm">
                   <thead>
-                    <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                    <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                       <th className="py-2 pr-3">Month</th>
                       <th className="py-2 pr-3 text-right">Total</th>
                       <th className="py-2 pr-3 text-right">Balance</th>
@@ -270,12 +270,12 @@ export function TenantDetailPage() {
                   <tbody className="divide-y divide-slate-100">
                     {invoices.map((i) => (
                       <tr key={i.id}>
-                        <td className="py-2 pr-3 font-medium">{monthLabel(i.month)}</td>
-                        <td className="py-2 pr-3 text-right"><Money value={i.total} /></td>
-                        <td className="py-2 pr-3 text-right"><Money value={i.balance} /></td>
-                        <td className="py-2 pr-3">{i.due_date}</td>
-                        <td className="py-2"><InvoiceStatusBadge status={i.status} /></td>
-                        <td className="py-2 text-right">
+                        <td data-label="Month" className="py-2 pr-3 font-medium">{monthLabel(i.month)}</td>
+                        <td data-label="Total" className="py-2 pr-3 text-right"><Money value={i.total} /></td>
+                        <td data-label="Balance" className="py-2 pr-3 text-right"><Money value={i.balance} /></td>
+                        <td data-label="Due" className="py-2 pr-3">{i.due_date}</td>
+                        <td data-label="Status" className="py-2"><InvoiceStatusBadge status={i.status} /></td>
+                        <td data-label="" className="py-2 text-right">
                           {i.balance > 0 && (
                             <span className="flex justify-end gap-2">
                               <button onClick={() => setShowCollect(true)} className="text-xs font-medium text-brand-600 hover:underline">
@@ -299,9 +299,9 @@ export function TenantDetailPage() {
               <p className="text-sm text-slate-500">No payments recorded.</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="rtable w-full text-sm">
                   <thead>
-                    <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                    <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                       <th className="py-2 pr-3">Receipt</th>
                       <th className="py-2 pr-3 text-right">Amount</th>
                       <th className="py-2 pr-3">Method</th>
@@ -312,18 +312,18 @@ export function TenantDetailPage() {
                   <tbody className="divide-y divide-slate-100">
                     {payments.map((p) => (
                       <tr key={p.id} className={(p.status ?? "active") !== "active" ? "opacity-60" : undefined}>
-                        <td className="py-2 pr-3">
-                          <Link to={`/app/payments/${p.id}`} className="font-medium text-brand-600 hover:underline">
+                        <td data-label="Receipt" className="py-2 pr-3">
+                          <Link to={`/app/payments/${p.id}`} className="font-medium text-slate-900 underline-offset-2 hover:underline">
                             {p.receipt_no}
                           </Link>{" "}
                           {(p.status ?? "active") !== "active" && (
                             <PaymentStatusBadge status={p.status} />
                           )}
                         </td>
-                        <td className="py-2 pr-3 text-right"><Money value={p.amount} /></td>
-                        <td className="py-2 pr-3">{p.mpesa_code ? `M-Pesa ${p.mpesa_code}` : p.method}</td>
-                        <td className="py-2 pr-3">{new Date(p.paid_at).toLocaleDateString("en-GB")}</td>
-                        <td className="py-2 text-xs text-slate-500">
+                        <td data-label="Amount" className="py-2 pr-3 text-right"><Money value={p.amount} /></td>
+                        <td data-label="Method" className="py-2 pr-3">{p.mpesa_code ? `M-Pesa ${p.mpesa_code}` : p.method}</td>
+                        <td data-label="Date" className="py-2 pr-3">{formatDate(p.paid_at)}</td>
+                        <td data-label="Applied to" className="py-2 text-xs text-slate-500">
                           {p.allocations.length === 0
                             ? "held as prepaid credit"
                             : p.allocations.map((a) => `${a.month ? monthLabel(a.month) : formatKES(a.amount)}${a.month ? ` ${formatKES(a.amount)}` : ""}`).join(" + ")}
@@ -342,7 +342,7 @@ export function TenantDetailPage() {
         <CardBody>
           <h2 className="mb-2 font-semibold">Tenant portal access</h2>
           {hasPortal ? (
-            <p className="text-sm text-green-700">This tenant has a portal login and can view balances, pay via M-Pesa, and download their statement.</p>
+            <p className="text-sm text-slate-600">This tenant has a portal login and can view balances, pay via M-Pesa, and download their statement.</p>
           ) : (
             <InviteTenantButton tenant={tenant} />
           )}
@@ -475,7 +475,9 @@ export function SettleDepositModal({ orgId, tenant, outstanding, onClose, onSett
           <div key={i} className="grid grid-cols-[1fr_160px_auto] gap-2">
             <Input value={l.label} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} placeholder="e.g. Repairs, Unpaid balance, Cleaning" />
             <Input value={l.amount} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))} inputMode="numeric" placeholder="KES" />
-            <Button type="button" variant="ghost" size="sm" onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</Button>
+            <Button type="button" variant="ghost" size="sm" aria-label="Remove deduction" onClick={() => setLines(lines.filter((_, j) => j !== i))}>
+              <XIcon />
+            </Button>
           </div>
         ))}
         <Button type="button" variant="secondary" size="sm" onClick={() => setLines([...lines, { label: "", amount: "" }])}>

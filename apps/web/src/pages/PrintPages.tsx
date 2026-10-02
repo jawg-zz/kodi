@@ -18,7 +18,7 @@ import { Loading, ErrorBanner } from "../components/ui";
 import { Money } from "../components/domain";
 import type { DepositSettlement, InvoiceWithRefs, PaymentWithRefs, Tenant } from "../lib/types";
 
-function DocShell({ orgName, title, children }: { orgName: string; title: string; children: React.ReactNode }) {
+function DocShell({ orgName, title, stamp, children }: { orgName: string; title: string; stamp?: string; children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-slate-200 py-8 print:bg-white print:py-0">
       <div className="no-print mx-auto mb-4 max-w-[210mm] text-right">
@@ -29,10 +29,17 @@ function DocShell({ orgName, title, children }: { orgName: string; title: string
           Print / Save PDF
         </button>
       </div>
-      <div className="print-doc mx-auto max-w-[210mm] rounded-lg border border-slate-300 bg-white p-10 shadow">
+      <div className="print-doc relative mx-auto max-w-[210mm] rounded-lg border border-slate-300 bg-white p-10 shadow">
+        {stamp && (
+          <div
+            aria-hidden="true"
+            className="print-ink pointer-events-none absolute right-10 top-16 rotate-[-8deg] select-none rounded-md border-4 border-brand-600 px-6 py-1.5 text-3xl font-bold uppercase tracking-[0.2em] text-brand-600/80"
+          >
+            {stamp}
+          </div>
+        )}
         <div className="border-b-2 border-slate-900 pb-4">
           <h1 className="text-2xl font-bold">{orgName}</h1>
-          <p className="text-sm text-slate-500">Rent management · Kenya</p>
         </div>
         <h2 className="mt-4 text-xl font-bold">{title}</h2>
         {children}
@@ -48,7 +55,7 @@ function Table({ head, rows }: { head: string[]; rows: React.ReactNode[][] }) {
   return (
     <table className="mt-3 w-full text-sm">
       <thead>
-        <tr className="border-b border-slate-300 text-left text-xs uppercase text-slate-500">
+        <tr className="border-b border-slate-300 text-left text-xs text-slate-500">
           {head.map((h) => (
             <th key={h} className="py-2 pr-3">{h}</th>
           ))}
@@ -110,7 +117,11 @@ export function InvoiceDocPage() {
   if (!inv) return <div className="p-10"><Loading label="Loading invoice…" /></div>;
 
   return (
-    <DocShell orgName={orgName} title={`Rent invoice — ${monthLabel(inv.month)}`}>
+    <DocShell
+      orgName={orgName}
+      title={`Rent invoice — ${monthLabel(inv.month)}`}
+      stamp={inv.balance <= 0 ? "Paid" : undefined}
+    >
       <div className="mt-3 grid grid-cols-2 gap-4 text-sm">
         <div>
           <p className="text-slate-500">Billed to</p>
@@ -118,7 +129,8 @@ export function InvoiceDocPage() {
           <p>{inv.tenant?.phone}</p>
         </div>
         <div className="text-right">
-          <p className="text-slate-500">Unit {(inv as { unit?: { label?: string } }).unit?.label ?? ""} · Due {formatDate(inv.due_date)}</p>
+          <p className="text-slate-500">Unit {(inv as { unit?: { label?: string } }).unit?.label ?? ""}</p>
+          <p className="text-slate-500">Due {formatDate(inv.due_date)}</p>
           <p>Status: <strong>{inv.status}</strong></p>
         </div>
       </div>
@@ -138,12 +150,16 @@ export function InvoiceDocPage() {
         Please pay {formatKES(inv.balance)} on or before {formatDate(inv.due_date)} via M-Pesa to avoid late penalties.
       </p>
       {paybill && inv.balance > 0 && (
-        <div className="mt-3 rounded border border-slate-300 p-3 text-sm">
-          <p className="font-semibold">Pay via M-Pesa Paybill</p>
+        <div className="print-ink mt-3 rounded border border-brand-200 bg-brand-50 p-3 text-sm">
+          <p className="font-semibold text-brand-800">Pay via M-Pesa Paybill</p>
           <div className="flex flex-wrap items-center gap-4">
             <div>
-              <p>Business no: <strong>{paybill.shortcode}</strong> · Account no: <strong>{paybill.account_code}</strong> · Amount: <Money value={inv.balance} className="font-semibold" /></p>
-              <p className="mt-1 text-xs text-slate-500">Or scan the code with your phone camera — M-Pesa opens with this bill pre-filled.</p>
+              <p>
+                Business no: <strong className="font-mono tracking-wide">{paybill.shortcode}</strong>
+                {" "}· Account no: <strong className="font-mono tracking-wide">{paybill.account_code}</strong>
+                {" "}· Amount: <Money value={inv.balance} className="font-semibold" />
+              </p>
+              <p className="mt-1 text-xs text-slate-600">Or scan the code with your phone camera — M-Pesa opens with this bill pre-filled.</p>
             </div>
             {qr && (
               <img
@@ -194,7 +210,7 @@ export function ReceiptDocPage() {
         <div className="text-right">
           <p className="text-slate-500">Date</p>
           <p className="font-semibold">{formatDateTime(pay.paid_at)}</p>
-          <p>Method: {pay.method}{pay.mpesa_code ? ` · ${pay.mpesa_code}` : ""}</p>
+          <p>Method: {pay.method}{pay.mpesa_code ? `, ${pay.mpesa_code}` : ""}</p>
         </div>
       </div>
       <Table
@@ -287,13 +303,16 @@ export function StatementDocPage() {
 
   return (
     <DocShell orgName={orgName} title={`Tenant statement — ${tenant.full_name}`}>
-      <p className="mt-3 text-sm text-slate-600">
-        {tenant.phone} · Deposit held: <Money value={tenant.deposit_held} /> · Current balance:{" "}
-        <Money value={netOwed} className="font-bold" />
-        {credit > 0 && (
-          <span> (includes <Money value={credit} /> prepaid credit)</span>
-        )}
-      </p>
+      <div className="mt-3 space-y-0.5 text-sm text-slate-600">
+        <p>{tenant.phone}</p>
+        <p>
+          Deposit held: <Money value={tenant.deposit_held} />
+        </p>
+        <p>
+          Current balance: <Money value={netOwed} className="font-bold" />
+          {credit > 0 && <span> (includes <Money value={credit} /> prepaid credit)</span>}
+        </p>
+      </div>
       <h3 className="mt-4 font-semibold">Invoices</h3>
       <Table
         head={["Month", "Total", "Paid", "Balance"]}
@@ -317,9 +336,13 @@ export function StatementDocPage() {
           ])}
       />
       {paybill && netOwed > 0 && (
-        <div className="mt-3 rounded border border-slate-300 p-3 text-sm">
-          <p className="font-semibold">Pay the balance via M-Pesa Paybill</p>
-          <p>Business no: <strong>{paybill.shortcode}</strong> · Account no: <strong>{paybill.account_code}</strong> · Amount: <Money value={netOwed} className="font-semibold" /></p>
+        <div className="print-ink mt-3 rounded border border-brand-200 bg-brand-50 p-3 text-sm">
+          <p className="font-semibold text-brand-800">Pay the balance via M-Pesa Paybill</p>
+          <p>
+            Business no: <strong className="font-mono tracking-wide">{paybill.shortcode}</strong>
+            {" "}· Account no: <strong className="font-mono tracking-wide">{paybill.account_code}</strong>
+            {" "}· Amount: <Money value={netOwed} className="font-semibold" />
+          </p>
         </div>
       )}
     </DocShell>
@@ -352,9 +375,10 @@ export function SettlementDocPage() {
 
   return (
     <DocShell orgName={orgName} title="Deposit settlement">
-      <p className="mt-3 text-sm text-slate-600">
-        Tenant: <strong>{s.tenant?.full_name}</strong> · Deposit held: <Money value={s.deposit_held} />
-      </p>
+      <div className="mt-3 space-y-0.5 text-sm text-slate-600">
+        <p>Tenant: <strong className="text-slate-900">{s.tenant?.full_name}</strong></p>
+        <p>Deposit held: <Money value={s.deposit_held} /></p>
+      </div>
       <Table
         head={["Deduction", "Amount"]}
         rows={[

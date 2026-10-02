@@ -102,7 +102,7 @@ export function InvoicesPage() {
       </div>
 
       {notice && (
-        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+        <div className="print-ink mb-4 rounded-xl border border-brand-100 bg-brand-50 p-3 text-sm font-medium text-brand-700">
           {notice}
         </div>
       )}
@@ -116,14 +116,18 @@ export function InvoicesPage() {
         />
       ) : (
         <Card>
-          <div className="border-b border-slate-200 px-4 py-3 text-sm text-slate-600">
-            {shown.length} invoices · <Money value={shown.reduce((s, i) => s + i.total, 0)} className="font-semibold" /> billed ·{" "}
-            <Money value={totalOutstanding} className={`font-semibold ${totalOutstanding > 0 ? "text-red-600" : "text-brand-600"}`} /> outstanding
+          <div className="flex flex-wrap gap-x-6 gap-y-1 border-b border-slate-200 px-4 py-3 text-sm text-slate-600">
+            <span>{shown.length} invoice{shown.length === 1 ? "" : "s"}</span>
+            <span>billed <Money value={shown.reduce((s, i) => s + i.total, 0)} className="font-semibold text-slate-900" /></span>
+            <span>
+              outstanding{" "}
+              <Money value={totalOutstanding} className={`font-semibold ${totalOutstanding > 0 ? "text-red-600" : "text-brand-600"}`} />
+            </span>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="rtable w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                   <th className="px-4 py-3">Tenant</th>
                   <th className="px-4 py-3">Unit</th>
                   <th className="px-4 py-3">Breakdown</th>
@@ -136,19 +140,19 @@ export function InvoicesPage() {
               <tbody className="divide-y divide-slate-100">
                 {shown.map((i) => (
                   <tr key={i.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3">
-                      <Link to={`/app/tenants/${i.tenant_id}`} className="font-medium text-brand-600 hover:underline">
+                    <td data-label="Tenant" className="px-4 py-3">
+                      <Link to={`/app/tenants/${i.tenant_id}`} className="font-medium text-slate-900 underline-offset-2 hover:underline">
                         {i.tenant?.full_name ?? tenantName(i.tenant_id)}
                       </Link>
                     </td>
-                    <td className="px-4 py-3">{i.unit?.label ?? "—"}</td>
-                    <td className="px-4 py-3"><LinesBreakdown lines={i.lines} /></td>
-                    <td className="px-4 py-3 text-right"><Money value={i.total} /></td>
-                    <td className="px-4 py-3 text-right">
+                    <td data-label="Unit" className="px-4 py-3">{i.unit?.label ?? "—"}</td>
+                    <td data-label="Breakdown" className="px-4 py-3"><LinesBreakdown lines={i.lines} /></td>
+                    <td data-label="Total" className="px-4 py-3 text-right"><Money value={i.total} /></td>
+                    <td data-label="Balance" className="px-4 py-3 text-right">
                       <Money value={i.balance} className={i.balance > 0 ? "font-semibold text-red-600" : ""} />
                     </td>
-                    <td className="px-4 py-3">{i.due_date}</td>
-                    <td className="px-4 py-3">
+                    <td data-label="Due" className="px-4 py-3">{i.due_date}</td>
+                    <td data-label="" className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <InvoiceStatusBadge status={i.status} />
                         {i.balance > 0 && (
@@ -159,13 +163,13 @@ export function InvoicesPage() {
                             <button onClick={() => setPaying(i)} className="text-xs font-medium text-brand-600 hover:underline">
                               Record
                             </button>
-                            <button onClick={() => setEditing(i)} className="text-xs font-medium text-brand-600 hover:underline">
+                            <button onClick={() => setEditing(i)} className="text-xs font-medium text-slate-600 hover:underline">
                               Edit
                             </button>
                             <QrButton invoiceId={i.id} />
                           </>
                         )}
-                        <Link to={`/print/invoice/${i.id}`} target="_blank" rel="noreferrer" className="text-xs font-medium text-brand-600 hover:underline">
+                        <Link to={`/print/invoice/${i.id}`} target="_blank" rel="noreferrer" className="text-xs font-medium text-slate-600 hover:underline">
                           Print
                         </Link>
                       </div>
@@ -222,7 +226,7 @@ export function PayInvoiceModal({ orgId, invoice, tenantName, onClose, onRecorde
     <Modal title={`Record payment — ${tenantName} (${invoice.month})`} onClose={onClose}>
       <div className="space-y-4">
         <p className="text-sm text-slate-600">
-          Balance <Money value={invoice.balance} className="font-semibold" /> — pre-targeted
+          Balance <Money value={invoice.balance} className="font-semibold" /> of <Money value={invoice.total} className="font-semibold" /> total — pre-targeted
           below; anything extra settles the oldest invoices first.
         </p>
         <RecordPaymentFields
@@ -294,8 +298,7 @@ export function EditInvoiceModal({ invoice, tenantName, onClose, onSaved }: {
     <Modal title={'Edit invoice — ' + tenantName + ' (' + invoice.month + ')'} onClose={onClose}>
       <form onSubmit={save} className="space-y-4">
         <p className="text-sm text-slate-600">
-          Total <Money value={invoice.total} className="font-semibold" /> ·{' '}
-          Balance <Money value={invoice.balance} className="font-semibold" /> — amounts are
+          Total <Money value={invoice.total} className="font-semibold" />, balance <Money value={invoice.balance} className="font-semibold" /> — amounts are
           computed from payments and cannot be edited here.
         </p>
         <Field label="Due date" required>
@@ -395,7 +398,7 @@ function QrButton({ invoiceId }: { invoiceId: string }) {
               </Button>
               <Button variant="secondary" onClick={() => setOpen(false)}>Close</Button>
             </div>
-            {shared && <p className="text-xs text-green-700">Shared — the QR image and paybill details went with it.</p>}
+            {shared && <p className="text-xs font-medium text-brand-700">Shared — the QR image and paybill details went with it.</p>}
             {shareState === "unsupported" && (
               <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
                 <p>This browser can't share images directly. Send the caption instead and attach the downloaded QR:</p>

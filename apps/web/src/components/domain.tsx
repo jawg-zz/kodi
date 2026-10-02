@@ -3,7 +3,7 @@ import type { InvoiceLines, InvoiceStatus } from "@kodi/shared";
 import { Badge } from "./ui";
 
 export function Money({ value, className = "" }: { value: number; className?: string }) {
-  return <span className={className}>{formatKES(value)}</span>;
+  return <span className={`tabular-nums ${className}`}>{formatKES(value)}</span>;
 }
 
 const statusTone: Record<InvoiceStatus, "green" | "amber" | "red"> = {

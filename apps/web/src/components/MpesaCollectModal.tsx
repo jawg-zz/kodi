@@ -252,14 +252,14 @@ export function MpesaCollectModal({ tenantId, tenantName, defaultPhone, defaultA
             return (
               <p className="text-xs text-slate-500">
                 Would settle {formatKES(applied)} of {formatKES(total)} open
-                {preview.leftover > 0 && <> · {formatKES(preview.leftover)} kept as credit</>}.
+                {preview.leftover > 0 && <>, {formatKES(preview.leftover)} kept as credit</>}.
               </p>
             );
           })()}
           {error && <ErrorBanner message={error} />}
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button onClick={() => start()} disabled={phase === "sending"}>
+            <Button variant="mpesa" onClick={() => start()} disabled={phase === "sending"}>
               {phase === "sending" ? "Sending…" : "Send M-Pesa prompt"}
             </Button>
           </div>
@@ -270,7 +270,7 @@ export function MpesaCollectModal({ tenantId, tenantName, defaultPhone, defaultA
                 {attempts.slice(0, 5).map((a) => (
                   <li key={a.id} className="flex items-center justify-between gap-2">
                     <span>
-                      {formatKES(a.amount)} · {STATUS_LABEL[a.status] ?? a.status}
+                      {formatKES(a.amount)}, {STATUS_LABEL[a.status] ?? a.status}
                       {a.status === "success" && /late success/i.test(a.result_desc ?? "") && (
                         <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800" title="The money arrived after the prompt had already expired — it still recorded correctly.">
                           late
@@ -283,7 +283,7 @@ export function MpesaCollectModal({ tenantId, tenantName, defaultPhone, defaultA
                         <button
                           type="button"
                           onClick={() => retryFromHistory(a)}
-                          className="font-medium text-brand-600 hover:underline"
+                          className="font-medium text-slate-600 underline underline-offset-2 hover:text-slate-900 hover:no-underline"
                           title="Refill the form with this phone + amount"
                         >
                           Retry
@@ -308,7 +308,7 @@ export function MpesaCollectModal({ tenantId, tenantName, defaultPhone, defaultA
       )}
       {phase === "done" && (
         <div className="space-y-4">
-          <div className="rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-800">
+          <div className="print-ink rounded-lg border border-brand-100 bg-brand-50 p-4 text-sm font-medium text-brand-700">
             {message}
           </div>
           <div className="flex justify-end">
@@ -370,9 +370,9 @@ function WaitTimeline({ step, polls, secondsLeft }: {
             <li key={s.key} className="flex items-start gap-3 text-sm">
               <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
                 state === "done"
-                  ? "bg-green-100 text-green-700"
+                  ? "bg-brand-100 text-brand-700"
                   : state === "active"
-                    ? "bg-brand-100 text-brand-700"
+                    ? "bg-brand-600 text-white"
                     : "bg-slate-100 text-slate-400"
               }`}>
                 {state === "done" ? "✓" : i + 1}

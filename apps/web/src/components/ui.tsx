@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { Modal } from "./Modal";
 
-export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function Card({ children, className = "", id }: { children: ReactNode; className?: string; id?: string }) {
   return (
-    <div className={`rounded-xl border border-slate-200 bg-white shadow-sm ${className}`}>
+    <div id={id} className={`rounded-xl border border-slate-200 bg-white shadow-sm ${className}`}>
       {children}
     </div>
   );
@@ -29,7 +30,7 @@ export function Stat({ label, value, sub, accent }: {
     <Card>
       <CardBody>
         <p className="text-sm text-slate-500">{label}</p>
-        <p className={`mt-1 text-2xl font-bold ${accent ? colors[accent] : "text-slate-900"}`}>
+        <p className={`mt-1 text-2xl font-bold tabular-nums ${accent ? colors[accent] : "text-slate-900"}`}>
           {value}
         </p>
         {sub && <p className="mt-1 text-xs text-slate-500">{sub}</p>}
@@ -85,6 +86,27 @@ export function PageHeader({ title, sub, actions }: {
   );
 }
 
+/** Quiet in-page link. Green is reserved for money, so links are neutral. */
+export function TextLink({ to, children, className = "" }: {
+  to: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <Link
+      to={to}
+      className={`text-sm font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline ${className}`}
+    >
+      {children}
+    </Link>
+  );
+}
+
+/** Placeholder block for content that is loading in place. */
+export function Skeleton({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse rounded-lg bg-slate-200/70 ${className}`} aria-hidden="true" />;
+}
+
 export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -102,7 +124,7 @@ export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: (
 export function Loading({ label = "Loading…" }: { label?: string }) {
   return (
     <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">
-      <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-brand-600" />
+      <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
       {label}
     </div>
   );

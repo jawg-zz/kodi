@@ -111,7 +111,7 @@ export function TenantsPage() {
     <div>
       <PageHeader
         title="Tenants"
-        sub={`${tenants.length} tenants${missingCodes > 0 ? ` · ${missingCodes} missing Paybill codes` : ""}`}
+        sub={`${tenants.length} tenant${tenants.length === 1 ? "" : "s"}`}
         actions={
           <div className="flex gap-2">
             {missingCodes > 0 && (
@@ -124,7 +124,7 @@ export function TenantsPage() {
         }
       />
       {backfillMsg && (
-        <p className="mb-4 text-sm text-green-700">{backfillMsg}</p>
+        <p className="mb-4 text-sm font-medium text-brand-700">{backfillMsg}</p>
       )}
       {missingCodes > 0 && !backfillMsg && (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
@@ -153,9 +153,9 @@ export function TenantsPage() {
       ) : (
         <Card>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="rtable w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">Unit</th>
                   <th className="px-4 py-3">Phone</th>
@@ -168,24 +168,24 @@ export function TenantsPage() {
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((t) => (
                   <tr key={t.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3">
-                      <Link to={`/app/tenants/${t.id}`} className="font-medium text-brand-600 hover:underline">
+                    <td data-label="Name" className="px-4 py-3">
+                      <Link to={`/app/tenants/${t.id}`} className="font-medium text-slate-900 underline-offset-2 hover:underline">
                         {t.full_name}
                       </Link>
                     </td>
-                    <td className="px-4 py-3">{unitLabel(t.unit_id)}</td>
-                    <td className="px-4 py-3">{maskPhone(t.phone)}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{t.account_code ?? <span className="text-slate-400">—</span>}</td>
-                    <td className="px-4 py-3 text-right"><Money value={t.deposit_held} /></td>
-                    <td className="px-4 py-3">
+                    <td data-label="Unit" className="px-4 py-3">{unitLabel(t.unit_id)}</td>
+                    <td data-label="Phone" className="px-4 py-3">{maskPhone(t.phone)}</td>
+                    <td data-label="Paybill acct" className="px-4 py-3 font-mono text-xs">{t.account_code ?? <span className="text-slate-400">—</span>}</td>
+                    <td data-label="Deposit held" className="px-4 py-3 text-right"><Money value={t.deposit_held} /></td>
+                    <td data-label="Status" className="px-4 py-3">
                       <Badge tone={statusTone[t.status] ?? "slate"}>{t.status.replace("_", " ")}</Badge>
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td data-label="Actions" className="px-4 py-3 text-right">
                       <span className="flex justify-end gap-1">
                         <Button size="sm" variant="ghost" onClick={() => { setEditing(t); setShowModal(true); }}>
                           Edit
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(t)}>
+                        <Button size="sm" variant="ghost" className="text-red-600 hover:bg-red-50" onClick={() => setConfirmDelete(t)}>
                           Delete
                         </Button>
                       </span>
@@ -369,7 +369,7 @@ export function InviteTenantButton({ tenant }: { tenant: Tenant }) {
   return (
     <div className="rounded-lg border border-slate-200 p-3">
       {result ? (
-        <p className="text-sm text-green-700">{result}</p>
+        <p className="text-sm font-medium text-brand-700">{result}</p>
       ) : (
         <div className="space-y-2">
           <Field label="Tenant email">

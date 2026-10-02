@@ -139,7 +139,7 @@ export function PaymentsPage() {
     <div>
       <PageHeader
         title="Payments"
-        sub={`${shown.length} payments · ${new Intl.NumberFormat("en-US").format(activeTotal)} KES active`}
+        sub={`${shown.length} payment${shown.length === 1 ? "" : "s"}, ${new Intl.NumberFormat("en-US").format(activeTotal)} KES active`}
         actions={
           <div className="flex gap-2">
             <Button
@@ -192,7 +192,7 @@ export function PaymentsPage() {
             <ul className="mt-2 space-y-1 text-sm text-amber-900">
               {pendingTx.slice(0, 5).map((t) => (
                 <li key={t.id} className="flex justify-between gap-2">
-                  <span>{tenantName(t.tenant_id)} · <Money value={t.amount} /></span>
+                  <span>{tenantName(t.tenant_id)}, <Money value={t.amount} /></span>
                   <span className="text-xs text-amber-700">
                     {new Date(t.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                   </span>
@@ -278,9 +278,9 @@ export function PaymentsPage() {
       ) : (
         <Card>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="rtable w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                   <th className="px-4 py-3">Receipt</th>
                   <th className="px-4 py-3">Tenant</th>
                   <th className="px-4 py-3 text-right">Amount</th>
@@ -292,23 +292,23 @@ export function PaymentsPage() {
               <tbody className="divide-y divide-slate-100">
                 {shown.map((p) => (
                   <tr key={p.id} className={`hover:bg-slate-50 ${(p.status ?? "active") !== "active" ? "opacity-60" : ""}`}>
-                    <td className="px-4 py-3">
-                      <Link to={`/app/payments/${p.id}`} className="font-medium text-brand-600 hover:underline">
+                    <td data-label="Receipt" className="px-4 py-3">
+                      <Link to={`/app/payments/${p.id}`} className="font-medium text-slate-900 underline-offset-2 hover:underline">
                         {p.receipt_no}
                       </Link>
                     </td>
-                    <td className="px-4 py-3">
+                    <td data-label="Tenant" className="px-4 py-3">
                       <Link to={`/app/tenants/${p.tenant_id}`} className="hover:underline">
                         {p.tenant?.full_name ?? tenantName(p.tenant_id)}
                       </Link>
                     </td>
-                    <td className="px-4 py-3 text-right"><Money value={p.amount} className="font-semibold" /></td>
-                    <td className="px-4 py-3">
+                    <td data-label="Amount" className="px-4 py-3 text-right"><Money value={p.amount} className="font-semibold text-brand-600" /></td>
+                    <td data-label="Method" className="px-4 py-3">
                       {paymentMethodLabel(p.method)}
                       {p.mpesa_code && <span className="ml-1 text-xs text-slate-500">{p.mpesa_code}</span>}
                     </td>
-                    <td className="px-4 py-3">{formatDateTime(p.paid_at)}</td>
-                    <td className="px-4 py-3"><PaymentStatusBadge status={(p.status ?? "active") as PaymentStatus} /></td>
+                    <td data-label="Date" className="px-4 py-3">{formatDateTime(p.paid_at)}</td>
+                    <td data-label="Status" className="px-4 py-3"><PaymentStatusBadge status={(p.status ?? "active") as PaymentStatus} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -471,7 +471,7 @@ export function ReceiptPage() {
     <div>
       <PageHeader
         title={`Receipt ${payment.receipt_no}`}
-        sub={`${payment.tenant?.full_name ?? ""} · ${formatDateTime(payment.paid_at)}`}
+        sub={`${payment.tenant?.full_name ?? ""} — ${formatDateTime(payment.paid_at)}`}
         actions={
           <div className="flex gap-2">
             {!reversed && (
@@ -492,7 +492,7 @@ export function ReceiptPage() {
         }
       />
       {notice && (
-        <div className="mb-4 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+        <div className="print-ink mb-4 rounded-xl border border-brand-100 bg-brand-50 p-3 text-sm font-medium text-brand-700">
           {notice}
         </div>
       )}
@@ -510,7 +510,7 @@ export function ReceiptPage() {
             <PaymentStatusBadge status={(payment.status ?? "active") as PaymentStatus} />
           </div>
           <div className="flex justify-between"><span className="text-slate-500">Amount</span><Money value={payment.amount} className="font-bold" /></div>
-          <div className="flex justify-between"><span className="text-slate-500">Method</span><span>{paymentMethodLabel(payment.method)}{payment.mpesa_code ? ` · ${payment.mpesa_code}` : ""}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Method</span><span>{paymentMethodLabel(payment.method)}{payment.mpesa_code ? `, ${payment.mpesa_code}` : ""}</span></div>
           <div className="flex justify-between"><span className="text-slate-500">Date</span><span>{formatDateTime(payment.paid_at)}</span></div>
           {payment.note && <div className="flex justify-between"><span className="text-slate-500">Note</span><span>{payment.note}</span></div>}
           {payment.leftover_credit > 0 && (
@@ -637,7 +637,7 @@ function WebhookCard({ hits, onClose }: {
           <div className="mt-2 max-h-64 overflow-y-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-slate-200 text-left uppercase text-slate-500">
+                <tr className="border-b border-slate-200 text-left text-slate-500">
                   <th className="py-1 pr-2">When</th>
                   <th className="py-1 pr-2">Route</th>
                   <th className="py-1 pr-2">TransID</th>
@@ -785,7 +785,7 @@ function C2bReviewCard({ queue, tenants, payments, orgId, onChanged }: {
               <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
                 <div>
                   <p className="font-medium text-purple-950">
-                    <Money value={r.amount} /> · {r.trans_id}
+                    <Money value={r.amount} />, {r.trans_id}
                   </p>
                   <p className="text-xs text-purple-700">
                     {r.bill_ref ? `account "${r.bill_ref}" · ` : "no account · "}

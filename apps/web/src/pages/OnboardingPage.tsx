@@ -54,7 +54,7 @@ export function OnboardingPage() {
                   <label
                     key={p.code}
                     className={`flex cursor-pointer items-center justify-between rounded-lg border px-4 py-3 transition ${
-                      plan === p.code ? "border-brand-600 ring-2 ring-brand-100" : "border-slate-300 hover:border-slate-400"
+                      plan === p.code ? "border-slate-900 ring-2 ring-slate-900/10" : "border-slate-300 hover:border-slate-400"
                     }`}
                   >
                     <span className="flex items-center gap-3">
@@ -64,7 +64,7 @@ export function OnboardingPage() {
                         value={p.code}
                         checked={plan === p.code}
                         onChange={() => setPlan(p.code)}
-                        className="accent-brand-600"
+                        className="accent-slate-900"
                       />
                       <span>
                         <span className="font-medium">{p.name}</span>
@@ -73,7 +73,7 @@ export function OnboardingPage() {
                         </span>
                       </span>
                     </span>
-                    <Badge tone={p.priceKes === 0 ? "green" : "blue"}>
+                    <Badge tone={p.priceKes === 0 ? "slate" : "blue"}>
                       {p.priceKes === 0 ? "Free" : `${formatKES(p.priceKes)}/mo`}
                     </Badge>
                   </label>

@@ -13,9 +13,10 @@ import { stkInitiate, stkStatus } from "../lib/api";
 import type { InvoiceWithRefs, MpesaTransaction, PaybillInfo, PaymentWithRefs } from "../lib/types";
 import { Button } from "../components/Button";
 import { Field, Input } from "../components/Field";
+import { Modal } from "../components/Modal";
 import { Badge, Card, CardBody, ErrorBanner, Loading, Stat } from "../components/ui";
 import { InvoiceStatusBadge, Money, paymentMethodLabel } from "../components/domain";
-import { formatKES, monthLabel, normalizeKenyanPhone, parseKES } from "@kodi/shared";
+import { formatKES, formatDate, monthLabel, normalizeKenyanPhone, parseKES } from "@kodi/shared";
 
 export function PortalPage() {
   const { tenant } = useAuth();
@@ -107,7 +108,7 @@ export function PortalPage() {
                   Two ways: get an STK prompt on your phone, or pay from the M-Pesa menu yourself.
                 </p>
               </div>
-              <Button onClick={() => setShowPay(true)}>Pay via M-Pesa</Button>
+              <Button variant="mpesa" onClick={() => setShowPay(true)}>Pay via M-Pesa</Button>
             </div>
             <PaybillCard tenantId={tenant.id} balance={netOwed} invoiceId={oldest?.id} />
             {tx && tx.status === "pending" && (
@@ -116,7 +117,7 @@ export function PortalPage() {
               </div>
             )}
             {tx && tx.status === "success" && (
-              <div className="mt-3 rounded-lg bg-green-50 p-3 text-sm text-green-800">
+              <div className="mt-3 rounded-lg border border-brand-100 bg-brand-50 p-3 text-sm font-medium text-brand-700 print-ink">
                 Payment of {formatKES(tx.amount)} confirmed{tx.mpesa_receipt ? ` (M-Pesa ${tx.mpesa_receipt})` : ""}. Thank you!
               </div>
             )}
@@ -136,9 +137,9 @@ export function PortalPage() {
             <p className="text-sm text-slate-500">No invoices yet.</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="rtable w-full text-sm">
                 <thead>
-                  <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                  <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                     <th className="py-2 pr-3">Month</th>
                     <th className="py-2 pr-3 text-right">Total</th>
                     <th className="py-2 pr-3 text-right">Balance</th>
@@ -148,10 +149,10 @@ export function PortalPage() {
                 <tbody className="divide-y divide-slate-100">
                   {invoices.map((i) => (
                     <tr key={i.id}>
-                      <td className="py-2 pr-3 font-medium">{monthLabel(i.month)}</td>
-                      <td className="py-2 pr-3 text-right"><Money value={i.total} /></td>
-                      <td className="py-2 pr-3 text-right"><Money value={i.balance} /></td>
-                      <td className="py-2"><InvoiceStatusBadge status={i.status} /></td>
+                      <td data-label="Month" className="py-2 pr-3 font-medium">{monthLabel(i.month)}</td>
+                      <td data-label="Total" className="py-2 pr-3 text-right"><Money value={i.total} /></td>
+                      <td data-label="Balance" className="py-2 pr-3 text-right"><Money value={i.balance} /></td>
+                      <td data-label="Status" className="py-2"><InvoiceStatusBadge status={i.status} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -165,32 +166,36 @@ export function PortalPage() {
         <CardBody>
           <div className="mb-2 flex items-center justify-between">
             <h2 className="font-semibold">Your payments</h2>
-            <a href={`/print/statement/${tenant.id}`} target="_blank" rel="noreferrer" className="text-sm font-medium text-brand-600 hover:underline">
+            <a href={`/print/statement/${tenant.id}`} target="_blank" rel="noreferrer" className="text-sm font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline">
               Print statement
             </a>
           </div>
           {payments.length === 0 ? (
             <p className="text-sm text-slate-500">No payments yet.</p>
           ) : (
-            <ul className="divide-y divide-slate-100">
-              {payments
-                .filter((p) => (p.status ?? "active") === "active")
-                .map((p) => (
-                  <li key={p.id} className="flex items-center justify-between py-2 text-sm">
-                    <div>
-                      <p className="font-medium">{p.receipt_no}</p>
-                      <p className="text-xs text-slate-500">
-                        {paymentMethodLabel(p.method)}{p.mpesa_code ? ` · ${p.mpesa_code}` : ""} · {new Date(p.paid_at).toLocaleDateString("en-GB")}
-                        {p.allocations.length > 0 && (
-                          <> · {p.allocations.map((a) => (a.month ? monthLabel(a.month) : "")).filter(Boolean).join(", ") || "applied"}</>
-                        )}
-                        {p.allocations.length === 0 && <> · held as credit</>}
-                      </p>
-                    </div>
-                    <Money value={p.amount} className="font-semibold text-brand-600" />
-                  </li>
-                ))}
-            </ul>
+              <ul className="divide-y divide-slate-100">
+                {payments
+                  .filter((p) => (p.status ?? "active") === "active")
+                  .map((p) => {
+                    const applied = p.allocations.map((a) => (a.month ? monthLabel(a.month) : "")).filter(Boolean).join(", ");
+                    return (
+                      <li key={p.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                        <div className="min-w-0">
+                          <p className="font-medium">{p.receipt_no}</p>
+                          <p className="text-xs text-slate-500">
+                            {paymentMethodLabel(p.method)}{p.mpesa_code ? `, ${p.mpesa_code}` : ""}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {formatDate(p.paid_at)}
+                            {p.allocations.length > 0 && (applied ? `, applied to ${applied}` : ", applied")}
+                            {p.allocations.length === 0 && ", held as credit"}
+                          </p>
+                        </div>
+                        <Money value={p.amount} className="shrink-0 font-semibold text-brand-600" />
+                      </li>
+                    );
+                  })}
+              </ul>
           )}
         </CardBody>
       </Card>
@@ -240,26 +245,21 @@ function SelfPayModal({ tenantId, phone, balance, onClose, onStarted }: {
   };
 
   return (
-    <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="w-full max-w-lg rounded-xl bg-white shadow-xl">
-        <div className="border-b border-slate-200 px-5 py-4">
-          <h2 className="text-lg font-semibold">Pay via M-Pesa</h2>
+    <Modal title="Pay via M-Pesa" onClose={onClose}>
+      <form onSubmit={pay} className="space-y-4">
+        <Field label="Amount (KES)" required hint={`Your balance is ${formatKES(balance)}.`}>
+          <Input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="numeric" required />
+        </Field>
+        <Field label="Safaricom number" required hint="The prompt goes to this number.">
+          <Input value={number} onChange={(e) => setNumber(e.target.value)} inputMode="tel" required />
+        </Field>
+        {error && <ErrorBanner message={error} />}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="mpesa" disabled={busy}>{busy ? "Sending prompt…" : "Send M-Pesa prompt"}</Button>
         </div>
-        <form onSubmit={pay} className="space-y-4 px-5 py-4">
-          <Field label="Amount (KES)" required hint={`Your balance is ${formatKES(balance)}.`}>
-            <Input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="numeric" required />
-          </Field>
-          <Field label="Safaricom number" required hint="The prompt goes to this number.">
-            <Input value={number} onChange={(e) => setNumber(e.target.value)} inputMode="tel" required />
-          </Field>
-          {error && <ErrorBanner message={error} />}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={busy}>{busy ? "Sending prompt…" : "Send M-Pesa prompt"}</Button>
-          </div>
-        </form>
-      </div>
-    </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -359,58 +359,61 @@ function PaybillCard({ tenantId, balance, invoiceId }: { tenantId: string; balan
   };
 
   return (
-    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
-      <p className="font-semibold text-slate-800">Or pay from your M-Pesa menu</p>
+    <div className="mt-3 rounded-lg border border-brand-100 bg-brand-50 p-4 text-sm print-ink">
+      <p className="font-semibold text-brand-800">Or pay from your M-Pesa menu</p>
       {info.registered ? (
         <>
-          <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-slate-600">
+          <ol className="mt-2 list-decimal space-y-1 pl-5 text-slate-700">
             <li>M-Pesa → Lipa na M-Pesa → Paybill</li>
-            <li>Business no: <strong className="text-slate-900">{info.shortcode}</strong></li>
+            <li>
+              Business no:{" "}
+              <strong className="font-mono text-base tracking-wide text-slate-900">{info.shortcode}</strong>
+            </li>
             <li>
               Account no:{" "}
               {info.account_code ? (
-                <strong className="text-slate-900">{info.account_code}</strong>
+                <strong className="font-mono text-base tracking-wide text-slate-900">{info.account_code}</strong>
               ) : (
-                <button onClick={ensureCode} disabled={busy} className="font-medium text-brand-600 hover:underline">
+                <button onClick={ensureCode} disabled={busy} className="font-medium text-brand-700 underline underline-offset-2 hover:no-underline">
                   {busy ? "…" : "show my account code"}
                 </button>
               )}
             </li>
             <li>
-              Amount: <strong className="text-slate-900">{formatKES(balance)}</strong> (or what you can) + your PIN — it records automatically.
+              Amount: <strong className="tabular-nums text-slate-900">{formatKES(balance)}</strong> (or what you can) + your PIN — it records automatically.
             </li>
           </ol>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-2 text-xs text-slate-600">
             Use your account code so the payment lands on your rent straight away.
           </p>
           {qrBusy && qr === null && (
-            <p className="mt-2 text-xs text-slate-400">Preparing your payment QR…</p>
+            <p className="mt-2 text-xs text-slate-500">Preparing your payment QR…</p>
           )}
           {qr && qrAmount !== null && (
-            <div className="mt-2 flex flex-wrap items-center gap-3">
+            <div className="mt-3 flex flex-wrap items-center gap-3">
               <img
                 src={`data:image/png;base64,${qr}`}
                 alt="M-Pesa payment QR"
-                className="h-40 w-40 rounded-lg border border-slate-200 bg-white"
+                className="h-40 w-40 rounded-lg border border-brand-100 bg-white"
               />
-              <div className="text-xs text-slate-600">
-                <p className="font-medium text-slate-800">Scan to pay {formatKES(qrAmount)}</p>
-                <p>Opens M-Pesa with this bill pre-filled — no typing.</p>
+              <div className="text-xs text-slate-700">
+                <p className="font-semibold text-slate-900">Scan to pay {formatKES(qrAmount)}</p>
+                <p className="mt-0.5">Opens M-Pesa with this bill pre-filled — no typing.</p>
               </div>
             </div>
           )}
           {qrError && (
-            <p className="mt-2 text-xs text-slate-400">{qrError}</p>
+            <p className="mt-2 text-xs text-slate-500">{qrError}</p>
           )}
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button size="sm" variant="secondary" onClick={checkPaid} disabled={checking}>
               {checking ? "Checking…" : "I have paid — check now"}
             </Button>
-            {checkMsg && <p className="text-xs text-slate-600">{checkMsg}</p>}
+            {checkMsg && <p className="text-xs text-slate-700">{checkMsg}</p>}
           </div>
         </>
       ) : (
-        <p className="mt-1 text-slate-500">
+        <p className="mt-1 text-slate-600">
           Paybill self-serve is being set up — use the STK prompt above for now.
         </p>
       )}

@@ -7,6 +7,7 @@ import { AuthProvider, getAccessToken } from "./lib/auth.tsx";
 import { convex, convexConfigured } from "./lib/convex.ts";
 import { userManager, takeReturnTo, logtoConfigured } from "./lib/logto.ts";
 import { Loading } from "./components/ui.tsx";
+import { ToastProvider } from "./components/Toast.tsx";
 
 function ConfigError() {
   return (
@@ -61,7 +62,7 @@ function AuthCallback({ mode }: { mode: "login" | "silent" }) {
       {error ? (
         <div className="text-sm">
           <p className="text-red-600">Sign-in failed: {error}</p>
-          <a href="/" className="mt-2 inline-block font-medium text-brand-600 hover:underline">
+          <a href="/" className="mt-2 inline-block font-medium text-slate-600 underline hover:text-slate-900">
             Back to home
           </a>
         </div>
@@ -96,7 +97,9 @@ createRoot(document.getElementById("root")!).render(
       ) : (
         <ConvexProvider client={convex}>
           <AuthProvider>
-            <App />
+            <ToastProvider>
+              <App />
+            </ToastProvider>
           </AuthProvider>
         </ConvexProvider>
       )

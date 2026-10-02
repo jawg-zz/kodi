@@ -46,6 +46,21 @@ import { Money } from "../components/domain";
 import { Button } from "../components/Button";
 import { Field, Input, Select } from "../components/Field";
 import { Badge, Card, CardBody, ErrorBanner, Loading, PageHeader } from "../components/ui";
+import { useToast } from "../components/Toast";
+
+/** Anchor jump list for the long settings page. */
+const SECTIONS = [
+  ["profile", "Business profile"],
+  ["plan", "Plan"],
+  ["staff", "Managers"],
+  ["daraja", "M-Pesa"],
+  ["initiator", "Initiator & payouts"],
+  ["verify", "Verification"],
+  ["billmanager", "Bill Manager"],
+  ["collect", "Smart collections"],
+  ["bonga", "Lipa na Bonga"],
+  ["data", "Data"],
+] as const;
 
 export function SettingsPage() {
   const { org, membership } = useAuth();
@@ -69,6 +84,23 @@ export function SettingsPage() {
   return (
     <div className="space-y-4">
       <PageHeader title="Settings" sub={org.name} />
+      <nav
+        aria-label="Settings sections"
+        className="no-print sticky top-[68px] z-30 -mx-4 overflow-x-auto bg-slate-100/95 px-4 py-2 backdrop-blur sm:-mx-6 sm:px-6 lg:top-2"
+      >
+        <ul className="flex gap-2 text-sm">
+          {SECTIONS.map(([id, label]) => (
+            <li key={id} className="shrink-0">
+              <a
+                href={`#${id}`}
+                className="block rounded-full border border-slate-200 bg-white px-3 py-1.5 font-medium text-slate-600 hover:border-slate-400 hover:text-slate-900"
+              >
+                {label}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
       {error && <ErrorBanner message={error} />}
       <OrgProfileSection />
       <PlanSection />
@@ -87,13 +119,13 @@ export function SettingsPage() {
 // ---------------------------------------------------------------------------
 function OrgProfileSection() {
   const { org, membership, refresh } = useAuth();
+  const toast = useToast();
   const [name, setName] = useState(org?.name ?? "");
   const [dueDay, setDueDay] = useState(String(org?.invoice_due_day ?? 5));
   const [reversalLimit, setReversalLimit] = useState(
     String(org?.reversal_limit ?? 50000),
   );
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const save = async (e: React.FormEvent) => {
@@ -103,7 +135,6 @@ function OrgProfileSection() {
     const limit = Math.max(0, Math.min(10_000_000, parseInt(reversalLimit, 10) || 0));
     setBusy(true);
     setError(null);
-    setMsg(null);
     try {
       await updateOrg(org.id, {
         name: name.trim(),
@@ -111,7 +142,7 @@ function OrgProfileSection() {
         ...(membership?.role === "owner" ? { reversal_limit: limit } : {}),
       });
       await refresh();
-      setMsg("Saved.");
+      toast("Saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -120,7 +151,7 @@ function OrgProfileSection() {
   };
 
   return (
-    <Card>
+    <Card id="profile" className="scroll-mt-[84px] lg:scroll-mt-4">
       <CardBody>
         <h2 className="mb-3 font-semibold">Business profile</h2>
         <form onSubmit={save} className="grid max-w-lg gap-4">
@@ -144,7 +175,6 @@ function OrgProfileSection() {
             />
           </Field>
           {error && <ErrorBanner message={error} />}
-          {msg && <p className="text-sm text-green-700">{msg}</p>}
           <div><Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save"}</Button></div>
         </form>
       </CardBody>
@@ -183,19 +213,21 @@ function PlanSection() {
   };
 
   return (
-    <Card>
+    <Card id="plan" className="scroll-mt-[84px] lg:scroll-mt-4">
       <CardBody>
         <h2 className="mb-1 font-semibold">Plan & subscription</h2>
-        <p className="mb-3 text-sm text-slate-500">
+        <p className="mb-1 text-sm text-slate-500">
           Current: <Badge tone="blue">{current.name}</Badge>{" "}
           <span className="ml-1">
             {unitCount !== null ? `${unitCount}/${current.maxUnits} units used` : ""}
-          </span>{" "}
-          · Status: <Badge tone={org.subscription_status === "active" ? "green" : org.subscription_status === "past_due" ? "red" : "amber"}>{org.subscription_status}</Badge>
+          </span>
+        </p>
+        <p className="mb-3 text-sm text-slate-500">
+          Status: <Badge tone={org.subscription_status === "active" ? "green" : org.subscription_status === "past_due" ? "red" : "amber"}>{org.subscription_status}</Badge>
         </p>
         <div className="grid gap-2 sm:grid-cols-3">
           {PLANS.map((p) => (
-            <div key={p.code} className={`rounded-lg border p-3 ${p.code === org.plan_code ? "border-brand-600 ring-2 ring-brand-100" : "border-slate-200"}`}>
+            <div key={p.code} className={`rounded-lg border p-3 ${p.code === org.plan_code ? "border-slate-900 ring-2 ring-slate-900/10" : "border-slate-200"}`}>
               <p className="font-semibold">{p.name}</p>
               <p className="text-sm text-slate-500">Up to {p.maxUnits} units</p>
               <p className="mt-1 text-sm font-semibold">{p.priceKes === 0 ? "Free" : `${formatKES(p.priceKes)}/mo`}</p>
@@ -208,7 +240,7 @@ function PlanSection() {
           ))}
         </div>
         {error && <div className="mt-2"><ErrorBanner message={error} /></div>}
-        {msg && <p className="mt-2 text-sm text-green-700">{msg}</p>}
+        {msg && <p className="mt-2 text-sm font-medium text-brand-700">{msg}</p>}
         <p className="mt-3 text-xs text-slate-400">
           Paid plans are collected manually for now: after switching, our team contacts you to arrange M-Pesa payment and activates your subscription.
         </p>
@@ -247,7 +279,7 @@ function StaffSection({ staff, isOwner }: { staff: { user_id: string; role: stri
   };
 
   return (
-    <Card>
+    <Card id="staff" className="scroll-mt-[84px] lg:scroll-mt-4">
       <CardBody>
         <h2 className="mb-3 font-semibold">Managers & caretakers</h2>
         <ul className="mb-4 divide-y divide-slate-100 text-sm">
@@ -266,7 +298,7 @@ function StaffSection({ staff, isOwner }: { staff: { user_id: string; role: stri
             </div>
             <Field label="Phone"><Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0712 345 678" /></Field>
             {error && <ErrorBanner message={error} />}
-            {result && <p className="text-sm text-green-700">{result}</p>}
+            {result && <p className="text-sm font-medium text-brand-700">{result}</p>}
             <div><Button type="submit" disabled={busy}>{busy ? "Inviting…" : "Invite manager"}</Button></div>
           </form>
         ) : (
@@ -328,12 +360,12 @@ function DarajaSection() {
   };
 
   return (
-    <Card>
+    <Card id="daraja" className="scroll-mt-[84px] lg:scroll-mt-4">
       <CardBody>
         <h2 className="mb-1 font-semibold">M-Pesa (Daraja API)</h2>
         <p className="mb-3 text-sm text-slate-500">
           {loading ? "Checking…" : creds?.configured
-            ? <>Connected: {creds.environment} · shortcode {creds.shortcode} <Badge tone="green">configured</Badge></>
+            ? <>Connected: {creds.environment}, shortcode <strong className="font-mono">{creds.shortcode}</strong> <Badge tone="green">configured</Badge></>
             : <>Not configured — STK Push is disabled until you save credentials. <Badge tone="amber">manual payments still work</Badge></>}
         </p>
         {!loading && error && error.includes("Could not reach") && (
@@ -353,7 +385,7 @@ function DarajaSection() {
           <Field label="Shortcode (paybill / till)" required hint="Sandbox default: 174379"><Input value={shortcode} onChange={(e) => setShortcode(e.target.value)} /></Field>
           <Field label="Passkey" required><Input type="password" value={passkey} onChange={(e) => setPasskey(e.target.value)} placeholder={creds?.configured ? "•••• (re-enter to change)" : ""} /></Field>
           {error && <ErrorBanner message={error} />}
-          {msg && <p className="text-sm text-green-700">{msg}</p>}
+          {msg && <p className="text-sm font-medium text-brand-700">{msg}</p>}
           <div className="flex flex-wrap gap-2">
             <Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save credentials"}</Button>
             {creds?.configured && (
@@ -445,7 +477,7 @@ function C2bSection() {
         above, and record any till payments by hand with the transaction code.
       </p>
       {error && <div className="mt-2 max-w-lg"><ErrorBanner message={error} /></div>}
-      {msg && <p className="mt-2 text-sm text-green-700">{msg}</p>}
+      {msg && <p className="mt-2 text-sm font-medium text-brand-700">{msg}</p>}
       <div className="mt-3">
         <Button variant="secondary" onClick={register} disabled={busy}>
           {busy ? "Registering…" : status.registered ? "Re-register Paybill URLs" : "Register Paybill URLs"}
@@ -500,7 +532,7 @@ function ValidationModeRow() {
         </Button>
       </div>
       {error && <div className="mt-2"><ErrorBanner message={error} /></div>}
-      {msg && <p className="mt-2 text-sm text-green-700">{msg}</p>}
+      {msg && <p className="mt-2 text-sm font-medium text-brand-700">{msg}</p>}
     </div>
   );
 }
@@ -659,12 +691,12 @@ function InitiatorSection() {
   };
 
   return (
-    <Card>
+    <Card id="initiator" className="scroll-mt-[84px] lg:scroll-mt-4">
       <CardBody>
         <h2 className="mb-1 font-semibold">Initiator & payouts</h2>
         <p className="mb-3 text-sm text-slate-500">
           {status?.configured
-            ? <>Operator <strong>{status.initiator_name}</strong> · cert {status.cert_subject ?? "—"}{" "}
+            ? <>Operator <strong>{status.initiator_name}</strong>, cert {status.cert_subject ?? "—"}{" "}
               {status.cert_expired ? <Badge tone="red">cert expired</Badge> : <Badge tone="green">cert ok</Badge>}</>
             : <>Not set — verification, reversals, refunds and balance checks stay disabled. <Badge tone="amber">optional</Badge></>}
         </p>
@@ -684,7 +716,7 @@ function InitiatorSection() {
             />
           </Field>
           {error && <ErrorBanner message={error} />}
-          {msg && <p className="text-sm text-green-700">{msg}</p>}
+          {msg && <p className="text-sm font-medium text-brand-700">{msg}</p>}
           <div><Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save initiator"}</Button></div>
         </form>
       </CardBody>
@@ -729,7 +761,7 @@ function VerifySection() {
   if (!org) return null;
 
   return (
-    <Card>
+    <Card id="verify" className="scroll-mt-[84px] lg:scroll-mt-4">
       <CardBody>
         <h2 className="mb-1 font-semibold">Verification & reconciliation</h2>
         <p className="mb-3 text-sm text-slate-500">
@@ -768,7 +800,7 @@ function VerifySection() {
           </Button>
         </div>
         {error && <div className="mt-2 max-w-lg"><ErrorBanner message={error} /></div>}
-        {msg && <p className="mt-2 text-sm text-green-700">{msg}</p>}
+        {msg && <p className="mt-2 text-sm font-medium text-brand-700">{msg}</p>}
         {jobs.length > 0 && (
           <ul className="mt-3 divide-y divide-slate-100 text-sm">
             {jobs.slice(0, 15).map((j) => (
@@ -842,12 +874,12 @@ function BillManagerSection() {
   };
 
   return (
-    <Card>
+    <Card id="billmanager" className="scroll-mt-[84px] lg:scroll-mt-4">
       <CardBody>
         <h2 className="mb-1 font-semibold">Bill Manager (Safaricom e-invoicing)</h2>
         <p className="mb-3 text-sm text-slate-500">
           {state?.opted_in
-            ? <>Opted in{state.email ? ` · ${state.email}` : ""}{state.last_mirrored_at ? ` · last mirror ${state.last_mirrored_at.slice(0, 10)}` : ""} <Badge tone="green">live</Badge></>
+            ? <>Opted in{state.email ? `, ${state.email}` : ""}{state.last_mirrored_at ? `, last mirror ${state.last_mirrored_at.slice(0, 10)}` : ""} <Badge tone="green">live</Badge></>
             : <>Outsources invoice SMS, 7/3/0-day reminders and e-receipts to Safaricom. <Badge tone="amber">not opted in</Badge></>}
         </p>
         {!state?.opted_in ? (
@@ -859,7 +891,7 @@ function BillManagerSection() {
               Safaricom sends 7/3/0-day SMS reminders
             </label>
             {error && <ErrorBanner message={error} />}
-            {msg && <p className="text-sm text-green-700">{msg}</p>}
+            {msg && <p className="text-sm font-medium text-brand-700">{msg}</p>}
             <div><Button type="submit" disabled={busy !== null}>{busy === "optin" ? "Opting in…" : "Opt in"}</Button></div>
           </form>
         ) : (
@@ -873,7 +905,7 @@ function BillManagerSection() {
               </Button>
             </div>
             {error && <ErrorBanner message={error} />}
-            {msg && <p className="text-sm text-green-700">{msg}</p>}
+            {msg && <p className="text-sm font-medium text-brand-700">{msg}</p>}
             <p className="text-xs text-slate-400">
               Payments arrive on the Bill Manager callback with the full phone number and reconcile like Paybill hits.
               Cancel a mirrored invoice from the invoice row while unpaid.
@@ -911,7 +943,7 @@ function SmartCollectSection() {
   };
 
   return (
-    <Card>
+    <Card id="collect" className="scroll-mt-[84px] lg:scroll-mt-4">
       <CardBody>
         <h2 className="mb-1 font-semibold">Smart collections</h2>
         <p className="mb-3 text-sm text-slate-500">
@@ -926,7 +958,7 @@ function SmartCollectSection() {
         {error && <div className="mt-2 max-w-lg"><ErrorBanner message={error} /></div>}
         {check && (
           <p className="mt-2 text-sm text-slate-600">
-            Owner: <strong>{check.org_name ?? "unknown"}</strong> · tariff {check.tariff ?? "unknown"}
+            Owner: <strong>{check.org_name ?? "unknown"}</strong>, tariff {check.tariff ?? "unknown"}
           </p>
         )}
       </CardBody>
@@ -963,7 +995,7 @@ function BongaSection() {
   };
 
   return (
-    <Card>
+    <Card id="bonga" className="scroll-mt-[84px] lg:scroll-mt-4">
       <CardBody>
         <h2 className="mb-1 font-semibold">Lipa na Bonga (points part-payments)</h2>
         <p className="mb-3 text-sm text-slate-500">
@@ -973,7 +1005,7 @@ function BongaSection() {
           <Field label="Bonga username" required><Input value={username} onChange={(e) => setUsername(e.target.value)} /></Field>
           <Field label="Bonga password" required><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
           {error && <ErrorBanner message={error} />}
-          {msg && <p className="text-sm text-green-700">{msg}</p>}
+          {msg && <p className="text-sm font-medium text-brand-700">{msg}</p>}
           <div><Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save Bonga operator"}</Button></div>
         </form>
       </CardBody>
@@ -1146,7 +1178,7 @@ function DataSection() {
   };
 
   return (
-    <Card>
+    <Card id="data" className="scroll-mt-[84px] lg:scroll-mt-4">
       <CardBody>
         <h2 className="mb-3 font-semibold">Data</h2>
         <div className="flex flex-wrap gap-2">
@@ -1156,7 +1188,7 @@ function DataSection() {
         </div>
         <DemoClearSection onDone={(m) => setMsg(m)} onError={(m) => setError(m)} />
         {error && <div className="mt-2 max-w-lg"><ErrorBanner message={error} /></div>}
-        {msg && <p className="mt-2 text-sm text-green-700">{msg}</p>}
+        {msg && <p className="mt-2 text-sm font-medium text-brand-700">{msg}</p>}
         <p className="mt-2 max-w-lg text-xs text-slate-400">
           Demo data creates a sample property with tenants and invoices so you can explore. Export downloads
           everything for this business as JSON — keep regular copies.

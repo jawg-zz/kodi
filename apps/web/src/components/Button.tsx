@@ -1,7 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 const base =
-  "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600";
+  "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900";
 
 const sizes = {
   sm: "px-3 py-1.5 text-sm",
@@ -9,11 +9,14 @@ const sizes = {
   lg: "px-5 py-2.5 text-base",
 };
 
+// Primary actions are neutral ink. Brand green is reserved for money-in and
+// M-Pesa moments — see the "mpesa" variant.
 const variants = {
-  primary: "bg-brand-600 text-white hover:bg-brand-700",
+  primary: "bg-slate-900 text-white hover:bg-slate-700",
   secondary: "bg-white text-slate-800 border border-slate-300 hover:bg-slate-50",
   danger: "bg-red-600 text-white hover:bg-red-700",
   ghost: "text-slate-600 hover:bg-slate-100",
+  mpesa: "bg-brand-600 text-white hover:bg-brand-700",
 };
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

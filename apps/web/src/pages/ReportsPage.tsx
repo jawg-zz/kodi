@@ -345,9 +345,9 @@ export function ReportsPage() {
             ))}
           </div>
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="rtable w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                   <th className="py-2 pr-3">Month</th>
                   <th className="py-2 pr-3 text-right">Invoices</th>
                   <th className="py-2 pr-3 text-right">Expected</th>
@@ -359,12 +359,12 @@ export function ReportsPage() {
               <tbody className="divide-y divide-slate-100">
                 {collection.map((c) => (
                   <tr key={c.month} className="hover:bg-slate-50">
-                    <td className="py-2 pr-3 font-medium">{monthLabel(c.month)}</td>
-                    <td className="py-2 pr-3 text-right">{c.invoice_count}</td>
-                    <td className="py-2 pr-3 text-right"><Money value={c.expected} /></td>
-                    <td className="py-2 pr-3 text-right"><Money value={c.collected} className="text-brand-600" /></td>
-                    <td className="py-2 pr-3 text-right"><Money value={c.outstanding} className={c.outstanding > 0 ? "text-red-600" : undefined} /></td>
-                    <td className="py-2 text-right">{c.expected ? `${c.rate}%` : "—"}</td>
+                    <td data-label="Month" className="py-2 pr-3 font-medium">{monthLabel(c.month)}</td>
+                    <td data-label="Invoices" className="py-2 pr-3 text-right">{c.invoice_count}</td>
+                    <td data-label="Expected" className="py-2 pr-3 text-right"><Money value={c.expected} /></td>
+                    <td data-label="Collected" className="py-2 pr-3 text-right"><Money value={c.collected} className="text-brand-600" /></td>
+                    <td data-label="Outstanding" className="py-2 pr-3 text-right"><Money value={c.outstanding} className={c.outstanding > 0 ? "text-red-600" : undefined} /></td>
+                    <td data-label="Rate" className="py-2 text-right">{c.expected ? `${c.rate}%` : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -388,9 +388,9 @@ export function ReportsPage() {
             <p className="text-sm text-slate-500">No outstanding balances. Well done!</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="rtable w-full text-sm">
                 <thead>
-                  <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                  <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                     <th className="py-2 pr-3">Tenant</th>
                     <th className="py-2 pr-3">Property</th>
                     <th className="py-2 pr-3 text-right">Open invoices</th>
@@ -402,12 +402,12 @@ export function ReportsPage() {
                 <tbody className="divide-y divide-slate-100">
                   {arrears.rows.map((a) => (
                     <tr key={a.tenant_id} className="hover:bg-slate-50">
-                      <td className="py-2 pr-3 font-medium">{a.tenant_name}</td>
-                      <td className="py-2 pr-3">{a.property_name}</td>
-                      <td className="py-2 pr-3 text-right">{a.open_count}</td>
-                      <td className="py-2 pr-3">{monthLabel(a.oldest_month)}</td>
-                      <td className="py-2 pr-3"><Badge tone={bucketTone[a.bucket]}>{a.bucket}</Badge></td>
-                      <td className="py-2 text-right"><Money value={a.balance} className="font-semibold text-red-600" /></td>
+                      <td data-label="Tenant" className="py-2 pr-3 font-medium">{a.tenant_name}</td>
+                      <td data-label="Property" className="py-2 pr-3">{a.property_name}</td>
+                      <td data-label="Open invoices" className="py-2 pr-3 text-right">{a.open_count}</td>
+                      <td data-label="Oldest" className="py-2 pr-3">{monthLabel(a.oldest_month)}</td>
+                      <td data-label="Bucket" className="py-2 pr-3"><Badge tone={bucketTone[a.bucket]}>{a.bucket}</Badge></td>
+                      <td data-label="Balance" className="py-2 text-right"><Money value={a.balance} className="font-semibold text-red-600" /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -425,9 +425,9 @@ export function ReportsPage() {
               <p className="text-sm text-slate-500">No payments in this range.</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="rtable w-full text-sm">
                   <thead>
-                    <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                    <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                       <th className="py-2 pr-3">Method</th>
                       <th className="py-2 pr-3 text-right">Count</th>
                       <th className="py-2 text-right">Total</th>
@@ -436,15 +436,15 @@ export function ReportsPage() {
                   <tbody className="divide-y divide-slate-100">
                     {payments.by_method.map((m) => (
                       <tr key={m.method} className="hover:bg-slate-50">
-                        <td className="py-2 pr-3">{paymentMethodLabel(m.method)}</td>
-                        <td className="py-2 pr-3 text-right">{m.count}</td>
-                        <td className="py-2 text-right"><Money value={m.total} /></td>
+                        <td data-label="Method" className="py-2 pr-3">{paymentMethodLabel(m.method)}</td>
+                        <td data-label="Count" className="py-2 pr-3 text-right">{m.count}</td>
+                        <td data-label="Total" className="py-2 text-right"><Money value={m.total} /></td>
                       </tr>
                     ))}
                     <tr className="font-semibold">
-                      <td className="py-2 pr-3">Total</td>
-                      <td className="py-2 pr-3 text-right">{payments.count}</td>
-                      <td className="py-2 text-right"><Money value={payments.total} /></td>
+                      <td data-label="" className="py-2 pr-3">Total</td>
+                      <td data-label="Count" className="py-2 pr-3 text-right">{payments.count}</td>
+                      <td data-label="Total" className="py-2 text-right"><Money value={payments.total} /></td>
                     </tr>
                   </tbody>
                 </table>
@@ -473,9 +473,9 @@ export function ReportsPage() {
               <p className="text-sm text-slate-500">No M-Pesa attempts in this range.</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="rtable w-full text-sm">
                   <thead>
-                    <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                    <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                       <th className="py-2 pr-3">Status</th>
                       <th className="py-2 pr-3 text-right">Count</th>
                       <th className="py-2 text-right">Amount</th>
@@ -484,13 +484,13 @@ export function ReportsPage() {
                   <tbody className="divide-y divide-slate-100">
                     {mpesa.by_status.map((s) => (
                       <tr key={s.status} className="hover:bg-slate-50">
-                        <td className="py-2 pr-3">
+                        <td data-label="Status" className="py-2 pr-3">
                           <Badge tone={/success|matched/.test(s.status) ? "green" : /pending/.test(s.status) ? "amber" : "red"}>
                             {s.status}
                           </Badge>
                         </td>
-                        <td className="py-2 pr-3 text-right">{s.count}</td>
-                        <td className="py-2 text-right"><Money value={s.amount} /></td>
+                        <td data-label="Count" className="py-2 pr-3 text-right">{s.count}</td>
+                        <td data-label="Amount" className="py-2 text-right"><Money value={s.amount} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -521,9 +521,9 @@ export function ReportsPage() {
             <p className="text-sm text-slate-500">No cash received in this range.</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="rtable w-full text-sm">
                 <thead>
-                  <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                  <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                     <th className="py-2 pr-3">Day</th>
                     <th className="py-2 pr-3 text-right">Payments</th>
                     <th className="py-2 pr-3">Methods</th>
@@ -534,15 +534,15 @@ export function ReportsPage() {
                 <tbody className="divide-y divide-slate-100">
                   {dailyClose.rows.slice(0, 31).map((d) => (
                     <tr key={d.day} className="hover:bg-slate-50">
-                      <td className="py-2 pr-3 font-medium">{d.day}</td>
-                      <td className="py-2 pr-3 text-right">{d.count}</td>
-                      <td className="py-2 pr-3 text-xs text-slate-500">
+                      <td data-label="Day" className="py-2 pr-3 font-medium">{d.day}</td>
+                      <td data-label="Payments" className="py-2 pr-3 text-right">{d.count}</td>
+                      <td data-label="Methods" className="py-2 pr-3 text-xs text-slate-500">
                         {d.by_method.map((m) => `${paymentMethodLabel(m.method)} ${fmtKES(m.total)}`).join(" · ")}
                       </td>
-                      <td className="py-2 pr-3 text-xs text-slate-500">
+                      <td data-label="Recorded by" className="py-2 pr-3 text-xs text-slate-500">
                         {d.by_recorder.slice(0, 3).map((r) => `${r.recorder === "M-Pesa auto" ? "M-Pesa auto" : `staff ${r.recorder.slice(0, 8)}`} ${fmtKES(r.total)}`).join(" · ")}
                       </td>
-                      <td className="py-2 text-right"><Money value={d.collected} className="font-semibold" /></td>
+                      <td data-label="Total" className="py-2 text-right"><Money value={d.collected} className="font-semibold" /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -562,9 +562,9 @@ export function ReportsPage() {
             <p className="text-sm text-slate-500">No audit events yet.</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="rtable w-full text-sm">
                 <thead>
-                  <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                  <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                     <th className="py-2 pr-3">When</th>
                     <th className="py-2 pr-3">Action</th>
                     <th className="py-2 pr-3">Entity</th>
@@ -574,12 +574,12 @@ export function ReportsPage() {
                 <tbody className="divide-y divide-slate-100">
                   {audit.slice(0, 50).map((a) => (
                     <tr key={a.id} className="hover:bg-slate-50">
-                      <td className="py-2 pr-3 text-xs text-slate-500">
+                      <td data-label="When" className="py-2 pr-3 text-xs text-slate-500">
                         {new Date(a.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                       </td>
-                      <td className="py-2 pr-3"><Badge tone="slate">{a.action}</Badge></td>
-                      <td className="py-2 pr-3 text-xs text-slate-500">{a.entity_type}{a.entity_id ? ` ${a.entity_id.slice(0, 8)}` : ""}</td>
-                      <td className="py-2 text-xs text-slate-500">{a.metadata ? a.metadata.slice(0, 120) : "—"}</td>
+                      <td data-label="Action" className="py-2 pr-3"><Badge tone="slate">{a.action}</Badge></td>
+                      <td data-label="Entity" className="py-2 pr-3 text-xs text-slate-500">{a.entity_type}{a.entity_id ? ` ${a.entity_id.slice(0, 8)}` : ""}</td>
+                      <td data-label="Detail" className="py-2 text-xs text-slate-500">{a.metadata ? a.metadata.slice(0, 120) : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -596,9 +596,9 @@ export function ReportsPage() {
             <p className="text-sm text-slate-500">No properties yet.</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="rtable w-full text-sm">
                 <thead>
-                  <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                  <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                     <th className="py-2 pr-3">Property</th>
                     <th className="py-2 pr-3 text-right">Units</th>
                     <th className="py-2 pr-3 text-right">Occupied</th>
@@ -611,23 +611,23 @@ export function ReportsPage() {
                 <tbody className="divide-y divide-slate-100">
                   {rentRoll.rows.map((r) => (
                     <tr key={r.property_id} className="hover:bg-slate-50">
-                      <td className="py-2 pr-3 font-medium">{r.property_name}</td>
-                      <td className="py-2 pr-3 text-right">{r.units}</td>
-                      <td className="py-2 pr-3 text-right">{r.occupied}</td>
-                      <td className="py-2 pr-3 text-right">{r.vacant}</td>
-                      <td className="py-2 pr-3 text-right">{r.occupancy_pct}%</td>
-                      <td className="py-2 pr-3 text-right"><Money value={r.monthly_rent} /></td>
-                      <td className="py-2 text-right"><Money value={r.occupied_rent} /></td>
+                      <td data-label="Property" className="py-2 pr-3 font-medium">{r.property_name}</td>
+                      <td data-label="Units" className="py-2 pr-3 text-right">{r.units}</td>
+                      <td data-label="Occupied" className="py-2 pr-3 text-right">{r.occupied}</td>
+                      <td data-label="Vacant" className="py-2 pr-3 text-right">{r.vacant}</td>
+                      <td data-label="Occupancy" className="py-2 pr-3 text-right">{r.occupancy_pct}%</td>
+                      <td data-label="Monthly rent" className="py-2 pr-3 text-right"><Money value={r.monthly_rent} /></td>
+                      <td data-label="Occupied rent" className="py-2 text-right"><Money value={r.occupied_rent} /></td>
                     </tr>
                   ))}
                   <tr className="font-semibold">
-                    <td className="py-2 pr-3">Total</td>
-                    <td className="py-2 pr-3 text-right">{rentRoll.totals.units}</td>
-                    <td className="py-2 pr-3 text-right">{rentRoll.totals.occupied}</td>
-                    <td className="py-2 pr-3 text-right">{rentRoll.totals.vacant}</td>
-                    <td className="py-2 pr-3 text-right">{rentRoll.totals.occupancy_pct}%</td>
-                    <td className="py-2 pr-3 text-right"><Money value={rentRoll.totals.monthly_rent} /></td>
-                    <td className="py-2 text-right"><Money value={rentRoll.totals.occupied_rent} /></td>
+                    <td data-label="" className="py-2 pr-3">Total</td>
+                    <td data-label="Units" className="py-2 pr-3 text-right">{rentRoll.totals.units}</td>
+                    <td data-label="Occupied" className="py-2 pr-3 text-right">{rentRoll.totals.occupied}</td>
+                    <td data-label="Vacant" className="py-2 pr-3 text-right">{rentRoll.totals.vacant}</td>
+                    <td data-label="Occupancy" className="py-2 pr-3 text-right">{rentRoll.totals.occupancy_pct}%</td>
+                    <td data-label="Monthly rent" className="py-2 pr-3 text-right"><Money value={rentRoll.totals.monthly_rent} /></td>
+                    <td data-label="Occupied rent" className="py-2 text-right"><Money value={rentRoll.totals.occupied_rent} /></td>
                   </tr>
                 </tbody>
               </table>
@@ -731,7 +731,7 @@ function PayoutsCard({ orgId, balance, jobs, onChanged }: {
           <Button type="submit" variant="secondary" disabled={busy}>{busy ? "Sending…" : "Top up float"}</Button>
         </form>
         {error && <div className="mt-2 max-w-lg"><ErrorBanner message={error} /></div>}
-        {msg && <p className="mt-2 text-sm text-green-700">{msg}</p>}
+        {msg && <p className="mt-2 text-sm font-medium text-brand-700">{msg}</p>}
         {jobs.length > 0 && (
           <ul className="mt-3 divide-y divide-slate-100 text-sm">
             {jobs.map((j) => (
