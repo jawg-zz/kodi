@@ -10,7 +10,7 @@ import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { assertOrgMember, assertOwner, assertStaff, audit, normalizePhone, siteBaseUrl } from "./lib/auth";
-import { cachedDarajaToken, darajaBase } from "./lib/daraja";
+import { cachedDarajaToken, darajaBase, isDarajaAuthDead, mintFreshDarajaToken } from "./lib/daraja";
 import { recordPaymentCore, reversePaymentInTx } from "./lib/ledger";
 
 /** process.env in actions (Node runtime). Declared locally to avoid @types/node. */
@@ -1273,23 +1273,32 @@ export const registerC2bUrls = action({
     const validUrl = `${siteBase}/c2b-validation`;
     // C2B v2 (current per Daraja 3.0 docs): payloads carry a masked MSISDN
     // (2547***126) instead of v1's SHA-256 hash — see msisdnMatch below.
-    const regRes = await fetch(`${base}/mpesa/c2b/v2/registerurl`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      signal: AbortSignal.timeout(30_000),
-      body: JSON.stringify({
-        ShortCode: creds.shortcode,
-        ResponseType: "Completed",
-        // NOTE: Daraja rejects callback URLs containing the word "MPESA"
-        // (error 400.003.02) — keep these paths free of it.
-        ConfirmationURL: confirmUrl,
-        ValidationURL: validUrl,
-      }),
-    });
-    const rawBody = await regRes.text();
+    const postRegister = async (bearer: string) => {
+      const res = await fetch(`${base}/mpesa/c2b/v2/registerurl`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearer}`,
+          "Content-Type": "application/json",
+        },
+        signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({
+          ShortCode: creds.shortcode,
+          ResponseType: "Completed",
+          // NOTE: Daraja rejects callback URLs containing the word "MPESA"
+          // (error 400.003.02) — keep these paths free of it.
+          ConfirmationURL: confirmUrl,
+          ValidationURL: validUrl,
+        }),
+      });
+      return { res, rawBody: await res.text() };
+    };
+    let { res: regRes, rawBody } = await postRegister(token);
+    // A cached token can be server-side dead while looking fresh (HTTP 401,
+    // or a 200 envelope with 404.001.03) — mint once and retry.
+    if (isDarajaAuthDead(regRes.status, rawBody)) {
+      const fresh = await mintFreshDarajaToken(ctx, caller.orgId, creds);
+      ({ res: regRes, rawBody } = await postRegister(fresh));
+    }
     let reg: { ResponseCode?: string; ResponseDescription?: string };
     try {
       reg = JSON.parse(rawBody) as typeof reg;

@@ -2,7 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { action, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { assertOrgMember, assertStaff, audit, siteBaseUrl } from "./lib/auth";
-import { cachedDarajaToken, darajaBase, mintFreshDarajaToken } from "./lib/daraja";
+import { cachedDarajaToken, darajaBase, isDarajaAuthDead, mintFreshDarajaToken } from "./lib/daraja";
 import { encryptSecret } from "./lib/mpesaCrypto";
 import { postCandidates } from "./lib/initiatorJobs";
 
@@ -60,6 +60,7 @@ export async function billManagerPost(
   body: Record<string, unknown>,
   label: string,
   timeoutMs = 30_000,
+  opts?: { refreshToken?: () => Promise<string> },
 ): Promise<{ status: number; body: string }> {
   // Docs-canonical single-segment first, then the email's doubled
   // production form, then the mpesa/-prefixed legacy form.
@@ -68,18 +69,29 @@ export async function billManagerPost(
     : path;
   const candidates = [path, doubled, `mpesa/${path}`];
   let last404 = "";
+  let bearer = token;
   for (const p of candidates) {
-    const res = await fetch(`${base}/${p}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        appKey,
-      },
-      signal: AbortSignal.timeout(timeoutMs),
-      body: JSON.stringify(body),
-    });
-    const text = await res.text();
+    const post = async () => {
+      const res = await fetch(`${base}/${p}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearer}`,
+          "Content-Type": "application/json",
+          appKey,
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify(body),
+      });
+      return { res, text: await res.text() };
+    };
+    let { res, text } = await post();
+    // Stale-token retry: Daraja kills tokens on every mint, and the death
+    // can arrive as HTTP 401 or a 200 envelope with 404.001.03. One fresh
+    // mint, one retry, same path.
+    if (isDarajaAuthDead(res.status, text) && opts?.refreshToken) {
+      bearer = await opts.refreshToken();
+      ({ res, text } = await post());
+    }
     if (res.status === 404) {
       last404 = text.slice(0, 160);
       continue;
@@ -287,6 +299,7 @@ export const mirrorInvoicesToBillManager = action({
           },
           "Bill Manager",
           60_000,
+          { refreshToken: () => mintFreshDarajaToken(ctx, args.orgId, creds) },
         );
       } catch (e) {
         failed += chunk.length;
@@ -359,6 +372,7 @@ export const cancelBillManagerInvoice = action({
       path,
       { externalReference: ref },
       "Bill Manager",
+    { refreshToken: () => mintFreshDarajaToken(ctx, args.orgId, creds) },
     );
     if (res.status === 409) {
       throw new ConvexError("Already paid — cancel is rejected once paid");
@@ -419,6 +433,7 @@ export const updateBillManagerDetails = action({
               : 0,
       },
       "Bill Manager",
+    { refreshToken: () => mintFreshDarajaToken(ctx, args.orgId, creds) },
     );
     if (res.status < 200 || res.status >= 300) {
       throw new ConvexError(
@@ -499,6 +514,7 @@ export const acknowledgeBillManagerPayment = action({
         externalReference: args.ack.externalReference,
       },
       "Bill Manager",
+    { refreshToken: () => mintFreshDarajaToken(ctx, args.orgId, creds) },
     );
     let msg = `HTTP ${res.status}`;
     try {

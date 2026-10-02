@@ -21,6 +21,22 @@ export function darajaBase(environment: DarajaEnv): string {
   return environment === "production" ? DARAJA_PROD : DARAJA_SANDBOX;
 }
 
+/**
+ * A dead token is reported two ways: HTTP 401, or a 200 envelope carrying
+ * errorCode 404.001.03 / "Invalid Access Token" (confirmed live on STK push,
+ * 2026-10-02). Daraja kills the previous token on every mint, so any cached
+ * token can be server-side dead while looking fresh. Call sites that retry
+ * on token death must check both signals, not just the status.
+ */
+export function isDarajaAuthDead(status: number, raw: string): boolean {
+  if (status === 401) return true;
+  const head = raw.slice(0, 500);
+  return (
+    /"errorCode"\s*:\s*"404\.001\.03"/i.test(head) ||
+    /invalid access token/i.test(head)
+  );
+}
+
 /** Pure freshness check: is the cached token still usable at `now`? */
 export function isTokenFresh(expiresAt: number, now = Date.now()): boolean {
   return Number.isFinite(expiresAt) && expiresAt - TOKEN_SKEW_MS > now;

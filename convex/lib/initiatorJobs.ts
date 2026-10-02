@@ -2,7 +2,7 @@ import { ConvexError } from "convex/values";
 import type { ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
-import { cachedDarajaToken, darajaBase, mintFreshDarajaToken } from "./daraja";
+import { cachedDarajaToken, darajaBase, isDarajaAuthDead, mintFreshDarajaToken } from "./daraja";
 import { mintSecurityCredential } from "./initiator";
 
 /**
@@ -147,13 +147,13 @@ export async function postCandidates(
     });
     const raw = await res.text();
     // Stale-token retry: Daraja kills tokens server-side on every parallel
-    // mint, so a cached token can 401 while looking fresh. Refresh once
-    // and restart the sweep with the new token — a second 401 is real.
-    // The refreshToken hook is consumed (cleared) so the recursive retry
-    // cannot loop: if the fresh token also 401s, the normal error path
-    // below surfaces it.
+    // mint, so a cached token can be dead while looking fresh — reported as
+    // HTTP 401, or as a 200 envelope with errorCode 404.001.03. Refresh once
+    // and restart the sweep with the new token; a second auth-dead reply is
+    // real. The refreshToken hook is consumed (cleared) so the recursive
+    // retry cannot loop.
     if (
-      res.status === 401 &&
+      isDarajaAuthDead(res.status, raw) &&
       bundle.refreshToken !== undefined
     ) {
       const refresh = bundle.refreshToken;

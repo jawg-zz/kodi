@@ -12,7 +12,7 @@ import {
   siteBaseUrl,
   stkPassword,
 } from "./lib/auth";
-import { cachedDarajaToken, darajaBase, mintFreshDarajaToken } from "./lib/daraja";
+import { cachedDarajaToken, darajaBase, isDarajaAuthDead, mintFreshDarajaToken } from "./lib/daraja";
 import { classifyStkCode } from "./lib/stkOutcome";
 import { encryptSecret } from "./lib/mpesaCrypto";
 import { inspectInitiatorCert } from "./lib/initiator";
@@ -412,13 +412,8 @@ export const stkInitiate = action({
     // token on every mint — QR loads, C2B callbacks and status polls all mint
     // through the shared cache, so a cached token can be server-side dead
     // while looking fresh. Mint once and retry on either signal.
-    const authDead = (a: { res: Response; raw: string; parsed: Record<string, unknown> }): boolean =>
-      a.res.status === 401 ||
-      strFieldOf(a.parsed, "errorCode", "ErrorCode") === "404.001.03" ||
-      /invalid access token/i.test(a.raw.slice(0, 500));
-
     let attempt = await attemptPush(token);
-    if (authDead(attempt)) {
+    if (isDarajaAuthDead(attempt.res.status, attempt.raw)) {
       token = await mintFreshDarajaToken(ctx, caller.orgId, creds);
       attempt = await attemptPush(token);
     }
@@ -495,26 +490,41 @@ export const stkStatus = action({
     if (creds === null) return fresh;
     try {
       const base = darajaBase(creds.environment);
-      const token = await cachedDarajaToken(ctx, caller.orgId, creds);
+      let token = await cachedDarajaToken(ctx, caller.orgId, creds);
       const timestamp = darajaTimestamp();
-      const q = await fetch(`${base}/mpesa/stkpushquery/v1/query`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        signal: AbortSignal.timeout(30_000),
-        body: JSON.stringify({
-          BusinessShortCode: creds.shortcode,
-          Password: stkPassword(creds.shortcode, creds.passkey, timestamp),
-          Timestamp: timestamp,
-          CheckoutRequestID: tx.checkoutRequestId,
-        }),
-      });
-      const data = (await q.json()) as {
-        ResultCode?: string;
-        ResultDesc?: string;
+      const postQuery = async (bearer: string) => {
+        const res = await fetch(`${base}/mpesa/stkpushquery/v1/query`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${bearer}`,
+            "Content-Type": "application/json",
+          },
+          signal: AbortSignal.timeout(30_000),
+          body: JSON.stringify({
+            BusinessShortCode: creds.shortcode,
+            Password: stkPassword(creds.shortcode, creds.passkey, timestamp),
+            Timestamp: timestamp,
+            CheckoutRequestID: tx.checkoutRequestId,
+          }),
+        });
+        return { res, raw: await res.text() };
       };
+      let { res: q, raw: qRaw } = await postQuery(token);
+      // A cached token can be server-side dead while looking fresh (HTTP 401
+      // or a 200 envelope with 404.001.03) — without the retry every poll
+      // until expiry fails silently and the transaction stays pending.
+      if (isDarajaAuthDead(q.status, qRaw)) {
+        token = await mintFreshDarajaToken(ctx, caller.orgId, creds);
+        ({ res: q, raw: qRaw } = await postQuery(token));
+      }
+      let data: { ResultCode?: string; ResultDesc?: string };
+      try {
+        data = JSON.parse(qRaw) as typeof data;
+      } catch {
+        // Unreadable reply — fall through: the row stays pending and the
+        // next poll or the callback resolves it.
+        data = {};
+      }
       const code = String(data.ResultCode ?? "");
       if (code === "0") {
         // Single atomic reconcile: records the payment (claiming the
