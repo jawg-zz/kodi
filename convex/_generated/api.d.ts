@@ -32,6 +32,7 @@ import type * as lib_initiator from "../lib/initiator.js";
 import type * as lib_initiatorJobs from "../lib/initiatorJobs.js";
 import type * as lib_ledger from "../lib/ledger.js";
 import type * as lib_mpesaCrypto from "../lib/mpesaCrypto.js";
+import type * as lib_sha256 from "../lib/sha256.js";
 import type * as lib_stkOutcome from "../lib/stkOutcome.js";
 import type * as mpesa from "../mpesa.js";
 import type * as mpesaInternal from "../mpesaInternal.js";
@@ -78,6 +79,7 @@ declare const fullApi: ApiFromModules<{
   "lib/initiatorJobs": typeof lib_initiatorJobs;
   "lib/ledger": typeof lib_ledger;
   "lib/mpesaCrypto": typeof lib_mpesaCrypto;
+  "lib/sha256": typeof lib_sha256;
   "lib/stkOutcome": typeof lib_stkOutcome;
   mpesa: typeof mpesa;
   mpesaInternal: typeof mpesaInternal;
