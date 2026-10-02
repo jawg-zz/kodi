@@ -325,3 +325,138 @@ test("collectionSummary rejects invalid month ranges", async () => {
     }),
   ).rejects.toThrow();
 });
+
+async function seedAllocatedPayment(
+  t: ReturnType<typeof convexTest>,
+  orgId: Id<"orgs">,
+  tenantId: Id<"tenants">,
+  invoiceId: Id<"invoices">,
+  paidAt: number,
+  amount: number,
+) {
+  return t.run(async (ctx) =>
+    ctx.db.insert("payments", {
+      orgId,
+      tenantId,
+      amount,
+      method: "mpesa_stk",
+      mpesaCode: `TIM-${paidAt}`,
+      paidAt,
+      allocations: [{ invoiceId, amount, month: undefined }],
+      receiptNo: `RCP-T${paidAt}`,
+    }),
+  );
+}
+
+test("propertyCollection splits performance per building with occupancy", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId, asStaff } = await seedOrg(t);
+  const green = await seedProperty(t, orgId, "Green Court");
+  // Second property with one occupied unit and a tenant.
+  const maweni = await t.run(async (ctx) => {
+    const propertyId = await ctx.db.insert("properties", {
+      orgId,
+      name: "Maweni",
+      property_type: "bedsitters",
+      location: "Kasarani",
+    });
+    const unitId = await ctx.db.insert("units", {
+      orgId,
+      propertyId,
+      label: "B1",
+      unit_type: "bedsitter",
+      rent_amount: 12000,
+      water_charge: 400,
+      garbage_charge: 200,
+      status: "vacant",
+    });
+    return { propertyId, unitId };
+  });
+
+  await seedInvoice(t, orgId, green.tenantId, green.occupiedUnit, "2026-07", 20800, 0);
+  await seedInvoice(t, orgId, green.tenantId, green.occupiedUnit, "2026-07", 20800, 10800);
+  // Unassigned invoice: unit missing → rolls into the Unassigned row.
+  await t.run(async (ctx) =>
+    ctx.db.insert("invoices", {
+      orgId,
+      tenantId: green.tenantId,
+      month: "2026-07",
+      lines: { rent: 12000, water: 400, garbage: 200, other: 0 },
+      total: 12600,
+      dueDate: "2026-07-05",
+      status: "unpaid",
+      balance: 12600,
+    }),
+  );
+
+  const { rows } = await asStaff.query(api.reports.propertyCollection, {
+    orgId,
+    startMonth: "2026-07",
+    endMonth: "2026-07",
+  });
+  const greenRow = rows.find((r: any) => r.propertyName === "Green Court");
+  const maweniRow = rows.find((r: any) => r.propertyName === "Maweni");
+  const unassigned = rows.find((r: any) => r.propertyName === "Unassigned");
+  expect(greenRow).toMatchObject({ units: 2, occupied: 1, expected: 41600, outstanding: 10800 });
+  expect(maweniRow).toMatchObject({ units: 1, occupied: 0, expected: 0 });
+  expect(unassigned?.expected).toBe(12600);
+  // No payments seeded → rate 0; cash attribution is covered below and in
+  // the collectionSummary test. Vacant Maweni keeps its row (units > 0).
+  expect(greenRow.rate).toBe(0);
+  void maweni;
+});
+
+test("paymentTimeliness measures first-payment lateness per tenant", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId, asStaff } = await seedOrg(t);
+  const { tenantId, occupiedUnit } = await seedProperty(t, orgId, "Green Court");
+  // Second tenant for an on-time record.
+  const second = await t.run(async (ctx) => {
+    const tenantId2 = await ctx.db.insert("tenants", {
+      orgId,
+      full_name: "On-Time Otieno",
+      phone: "254700000002",
+      national_id: "456",
+      accountCode: "GC-A2",
+      unitId: occupiedUnit,
+      deposit_held: 0,
+      status: "active",
+    });
+    return tenantId2;
+  });
+
+  // Jane: due 5 July, paid 20 July → 15 days late.
+  const lateInv = await seedInvoice(t, orgId, tenantId, occupiedUnit, "2026-07", 20800, 0);
+  await seedAllocatedPayment(t, orgId, tenantId, lateInv, Date.UTC(2026, 6, 20), 20800);
+  // Otieno: due 5 July, paid 5 July (EOD) → on time.
+  const onTimeInv = await seedInvoice(t, orgId, second, occupiedUnit, "2026-07", 20800, 0);
+  await seedAllocatedPayment(t, orgId, second, onTimeInv, Date.UTC(2026, 6, 5, 18), 20800);
+
+  const res = await asStaff.query(api.reports.paymentTimeliness, {
+    orgId,
+    startMonth: "2026-07",
+    endMonth: "2026-07",
+  });
+  expect(res.paidInvoices).toBe(2);
+  expect(res.onTimeRate).toBe(50);
+  expect(res.avgDaysLate).toBe(14);
+  const jane = res.rows.find((r: any) => r.tenantName === "Jane Tenant");
+  const otieno = res.rows.find((r: any) => r.tenantName === "On-Time Otieno");
+  expect(jane).toMatchObject({ paidCount: 1, onTimeCount: 0, lateCount: 1, avgDaysLate: 14, worstDaysLate: 14 });
+  expect(otieno).toMatchObject({ paidCount: 1, onTimeCount: 1, lateCount: 0, worstDaysLate: 0 });
+  // Worst payers first.
+  expect(res.rows[0].tenantName).toBe("Jane Tenant");
+});
+
+test("arrears rows carry account code and last payment date", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId, asStaff } = await seedOrg(t);
+  const { tenantId, occupiedUnit } = await seedProperty(t, orgId, "Green Court");
+  await seedInvoice(t, orgId, tenantId, occupiedUnit, "2026-07", 20800, 10800);
+  await seedPayment(t, orgId, tenantId, Date.UTC(2026, 6, 10), 10000, "cash");
+
+  const res = await asStaff.query(api.reports.arrearsAging, { orgId });
+  expect(res.rows.length).toBe(1);
+  expect(res.rows[0].accountCode).toBe("GC-A1");
+  expect(res.rows[0].lastPaymentAt).toBe(Date.UTC(2026, 6, 10));
+});

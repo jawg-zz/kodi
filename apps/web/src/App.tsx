@@ -14,7 +14,7 @@ import { ReportsPage } from "./pages/ReportsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { PortalPage } from "./pages/PortalPage";
 import { InvitePage } from "./pages/InvitePage";
-import { InvoiceDocPage, ReceiptDocPage, SettlementDocPage, StatementDocPage } from "./pages/PrintPages";
+import { InvoiceDocPage, ReceiptDocPage, RentBookDocPage, SettlementDocPage, StatementDocPage } from "./pages/PrintPages";
 
 function RequireAuth() {
   const { loading, isAuthenticated } = useAuth();
@@ -105,6 +105,7 @@ export default function App() {
 
             {/* Print documents: staff view (tenant statement also reachable by tenant) */}
             <Route path="/print/invoice/:id" element={<InvoiceDocPage />} />
+            <Route path="/print/rent-book/:month" element={<RentBookDocPage />} />
             <Route path="/print/receipt/:id" element={<ReceiptDocPage />} />
             <Route path="/print/statement/:tenantId" element={<StatementDocPage />} />
             <Route path="/print/settlement/:id" element={<SettlementDocPage />} />

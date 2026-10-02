@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   addMonths,
   currentMonthKey,
@@ -12,11 +13,14 @@ import { useAuth } from "../lib/auth";
 import {
   getArrearsAging,
   getAuditTrail,
+  getC2bStatus,
   getCollectionSummary,
   getDailyClose,
   getDepositsAndCredits,
   getMpesaHealth,
+  getPaymentTimeliness,
   getPaymentsBreakdown,
+  getPropertyCollection,
   getRentRoll,
   latestBalance,
   listDarajaJobs,
@@ -32,8 +36,10 @@ import type {
   DarajaJob,
   DepositsAndCredits,
   MpesaHealth,
+  PaymentTimeliness,
   PaymentsBreakdown,
   Property,
+  PropertyCollectionRow,
   RentRoll,
 } from "../lib/types";
 import { Button } from "../components/Button";
@@ -85,6 +91,9 @@ export function ReportsPage() {
   const [properties, setProperties] = useState<Property[]>([]);
   const [collection, setCollection] = useState<CollectionMonth[]>([]);
   const [arrears, setArrears] = useState<ArrearsAging | null>(null);
+  const [propCollection, setPropCollection] = useState<PropertyCollectionRow[]>([]);
+  const [timeliness, setTimeliness] = useState<PaymentTimeliness | null>(null);
+  const [paybillNo, setPaybillNo] = useState("");
   const [payments, setPayments] = useState<PaymentsBreakdown | null>(null);
   const [mpesa, setMpesa] = useState<MpesaHealth | null>(null);
   const [rentRoll, setRentRoll] = useState<RentRoll | null>(null);
@@ -110,7 +119,7 @@ export function ReportsPage() {
         startMs: monthStartMs(months[0]),
         endMs: monthStartMs(addMonths(months[months.length - 1], 1)),
       };
-      const [props, coll, arr, pay, mpe, roll, dep, close, trail] = await Promise.all([
+      const [props, coll, arr, pay, mpe, roll, dep, close, trail, propCol, timel] = await Promise.all([
         listProperties(org.id),
         getCollectionSummary({ orgId: org.id, startMonth: s, endMonth: e, propertyId: propFilter }),
         getArrearsAging({ orgId: org.id, propertyId: propFilter }),
@@ -120,6 +129,8 @@ export function ReportsPage() {
         getDepositsAndCredits({ orgId: org.id, propertyId: propFilter }),
         getDailyClose({ orgId: org.id, ...windowMs }).catch(() => null),
         getAuditTrail(org.id).catch(() => []),
+        getPropertyCollection({ orgId: org.id, startMonth: s, endMonth: e }).catch(() => []),
+        getPaymentTimeliness({ orgId: org.id, startMonth: s, endMonth: e, propertyId: propFilter }).catch(() => null),
       ]);
       setProperties(props);
       setCollection(coll);
@@ -130,6 +141,13 @@ export function ReportsPage() {
       setDeposits(dep);
       setDailyClose(close);
       setAudit(trail);
+      setPropCollection(propCol);
+      setTimeliness(timel);
+      // Shortcode for WhatsApp reminder captions; fail soft — reminders
+      // still work, just without the paybill number in the message.
+      getC2bStatus()
+        .then((s) => setPaybillNo(s.shortcode))
+        .catch(() => {});
       try {
         setBalance(await latestBalance(org.id));
       } catch {
@@ -157,6 +175,17 @@ export function ReportsPage() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id, preset, startMonth, endMonth, propertyId]);
+
+  // Pre-filled WhatsApp reminder: the arrears list's whole job is turning
+  // balances into conversations, and WhatsApp is where those happen.
+  const reminderLink = (a: ArrearsAging["rows"][number]): string => {
+    const text =
+      `Hi ${a.tenant_name}, a friendly reminder that your rent is behind by ` +
+      `${new Intl.NumberFormat("en-US").format(a.balance)} KES (oldest: ${monthLabel(a.oldest_month)}). ` +
+      `Kindly pay via M-Pesa Paybill${paybillNo ? ` ${paybillNo}` : ""}` +
+      `${a.account_code ? `, account ${a.account_code}` : ""}. Thank you.`;
+    return `https://wa.me/${a.phone}?text=${encodeURIComponent(text)}`;
+  };
 
   const totals = useMemo(() => {
     const expected = collection.reduce((s, c) => s + c.expected, 0);
@@ -186,15 +215,55 @@ export function ReportsPage() {
     downloadCsv(
       `kodi-arrears-${rangeSuffix}.csv`,
       toCsv(
-        ["Tenant", "Phone", "Property", "Open invoices", "Oldest month", "Bucket", "Balance (KES)"],
+        ["Tenant", "Phone", "Account", "Property", "Open invoices", "Oldest month", "Bucket", "Balance (KES)", "Last payment"],
         arrears.rows.map((a) => [
           a.tenant_name,
           a.phone,
+          a.account_code,
           a.property_name,
           a.open_count,
           monthLabel(a.oldest_month),
           a.bucket,
           a.balance,
+          a.last_payment_at ? new Date(a.last_payment_at).toISOString().slice(0, 10) : "never",
+        ]),
+      ),
+    );
+  };
+
+  const exportPropertyCsv = () => {
+    if (propCollection.length === 0) return;
+    downloadCsv(
+      `kodi-properties-${rangeSuffix}.csv`,
+      toCsv(
+        ["Property", "Units", "Occupied", "Billed (KES)", "Collected (KES)", "Outstanding (KES)", "Rate (%)", "Invoices"],
+        propCollection.map((p) => [
+          p.property_name,
+          p.units,
+          p.occupied,
+          p.expected,
+          p.collected,
+          p.outstanding,
+          p.rate,
+          p.invoice_count,
+        ]),
+      ),
+    );
+  };
+
+  const exportTimelinessCsv = () => {
+    if (!timeliness || timeliness.rows.length === 0) return;
+    downloadCsv(
+      `kodi-timeliness-${rangeSuffix}.csv`,
+      toCsv(
+        ["Tenant", "Invoices paid", "On time", "Late", "Avg days late", "Worst days late"],
+        timeliness.rows.map((r) => [
+          r.tenant_name,
+          r.paid_count,
+          r.on_time_count,
+          r.late_count,
+          r.avg_days_late,
+          r.worst_days_late,
         ]),
       ),
     );
@@ -252,6 +321,8 @@ export function ReportsPage() {
           <>
             <Button variant="secondary" onClick={exportCollectionCsv}>Collection CSV</Button>
             <Button variant="secondary" onClick={exportArrearsCsv}>Arrears CSV</Button>
+            <Button variant="secondary" onClick={exportPropertyCsv}>Properties CSV</Button>
+            <Button variant="secondary" onClick={exportTimelinessCsv}>Timeliness CSV</Button>
             <Button variant="secondary" onClick={exportPaymentsCsv}>
               Payments CSV{payments?.truncated ? " (capped at 5,000)" : ""}
             </Button>
@@ -393,21 +464,43 @@ export function ReportsPage() {
                   <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
                     <th className="py-2 pr-3">Tenant</th>
                     <th className="py-2 pr-3">Property</th>
+                    <th className="py-2 pr-3">Account</th>
                     <th className="py-2 pr-3 text-right">Open invoices</th>
                     <th className="py-2 pr-3">Oldest</th>
+                    <th className="py-2 pr-3">Last payment</th>
                     <th className="py-2 pr-3">Bucket</th>
-                    <th className="py-2 text-right">Balance</th>
+                    <th className="py-2 pr-3 text-right">Balance</th>
+                    <th className="py-2 text-right">Follow-up</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {arrears.rows.map((a) => (
                     <tr key={a.tenant_id} className="hover:bg-slate-50">
-                      <td data-label="Tenant" className="py-2 pr-3 font-medium">{a.tenant_name}</td>
+                      <td data-label="Tenant" className="py-2 pr-3 font-medium">
+                        <Link to={`/app/tenants/${a.tenant_id}`} className="text-slate-900 underline-offset-2 hover:underline">
+                          {a.tenant_name}
+                        </Link>
+                      </td>
                       <td data-label="Property" className="py-2 pr-3">{a.property_name}</td>
+                      <td data-label="Account" className="py-2 pr-3 font-mono text-xs">{a.account_code || "—"}</td>
                       <td data-label="Open invoices" className="py-2 pr-3 text-right">{a.open_count}</td>
                       <td data-label="Oldest" className="py-2 pr-3">{monthLabel(a.oldest_month)}</td>
+                      <td data-label="Last payment" className="py-2 pr-3 text-slate-500">
+                        {a.last_payment_at ? new Date(a.last_payment_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "never"}
+                      </td>
                       <td data-label="Bucket" className="py-2 pr-3"><Badge tone={bucketTone[a.bucket]}>{a.bucket}</Badge></td>
-                      <td data-label="Balance" className="py-2 text-right"><Money value={a.balance} className="font-semibold text-red-600" /></td>
+                      <td data-label="Balance" className="py-2 pr-3 text-right"><Money value={a.balance} className="font-semibold text-red-600" /></td>
+                      <td data-label="Follow-up" className="py-2 text-right">
+                        <a
+                          href={reminderLink(a)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs font-medium text-brand-600 hover:underline"
+                          title="Opens WhatsApp with a payment reminder pre-filled"
+                        >
+                          Remind
+                        </a>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -416,6 +509,100 @@ export function ReportsPage() {
           )}
         </CardBody>
       </Card>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardBody>
+            <h2 className="mb-3 font-semibold">Property performance</h2>
+            {propCollection.length === 0 ? (
+              <p className="text-sm text-slate-500">No invoices in this range.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="rtable w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+                      <th className="py-2 pr-3">Property</th>
+                      <th className="py-2 pr-3 text-right">Occupancy</th>
+                      <th className="py-2 pr-3 text-right">Billed</th>
+                      <th className="py-2 pr-3 text-right">Collected</th>
+                      <th className="py-2 pr-3 text-right">Outstanding</th>
+                      <th className="py-2 text-right">Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {propCollection.map((p) => (
+                      <tr key={p.property_id ?? "unassigned"} className="hover:bg-slate-50">
+                        <td data-label="Property" className="py-2 pr-3 font-medium">{p.property_name}</td>
+                        <td data-label="Occupancy" className="py-2 pr-3 text-right text-slate-500">
+                          {p.units > 0 ? `${p.occupied}/${p.units}` : "—"}
+                        </td>
+                        <td data-label="Billed" className="py-2 pr-3 text-right"><Money value={p.expected} /></td>
+                        <td data-label="Collected" className="py-2 pr-3 text-right"><Money value={p.collected} className="text-brand-700" /></td>
+                        <td data-label="Outstanding" className="py-2 pr-3 text-right"><Money value={p.outstanding} className={p.outstanding > 0 ? "text-red-600" : ""} /></td>
+                        <td data-label="Rate" className="py-2 text-right font-medium">{p.expected ? `${p.rate}%` : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardBody>
+            <h2 className="mb-1 font-semibold">Payment timeliness</h2>
+            <p className="mb-3 text-sm text-slate-500">
+              {timeliness && timeliness.paid_invoices > 0
+                ? `${timeliness.on_time_rate}% of invoices were paid on or before the due date; late ones average ${timeliness.avg_days_late} days over.`
+                : "No paid invoices in this range yet."}
+            </p>
+            {!timeliness || timeliness.rows.length === 0 ? (
+              <p className="text-sm text-slate-500">Nothing to score yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="rtable w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+                      <th className="py-2 pr-3">Tenant</th>
+                      <th className="py-2 pr-3 text-right">Paid</th>
+                      <th className="py-2 pr-3 text-right">On time</th>
+                      <th className="py-2 pr-3 text-right">Late</th>
+                      <th className="py-2 pr-3 text-right">Avg late</th>
+                      <th className="py-2 text-right">Worst</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {timeliness.rows.slice(0, 10).map((r) => (
+                      <tr key={r.tenant_id} className="hover:bg-slate-50">
+                        <td data-label="Tenant" className="py-2 pr-3 font-medium">
+                          <Link to={`/app/tenants/${r.tenant_id}`} className="text-slate-900 underline-offset-2 hover:underline">
+                            {r.tenant_name}
+                          </Link>
+                        </td>
+                        <td data-label="Paid" className="py-2 pr-3 text-right">{r.paid_count}</td>
+                        <td data-label="On time" className="py-2 pr-3 text-right text-brand-700">{r.on_time_count}</td>
+                        <td data-label="Late" className="py-2 pr-3 text-right">{r.late_count}</td>
+                        <td data-label="Avg late" className="py-2 pr-3 text-right">{r.avg_days_late > 0 ? `${r.avg_days_late}d` : "—"}</td>
+                        <td data-label="Worst" className="py-2 text-right">
+                          {r.worst_days_late > 0 ? (
+                            <span className={r.worst_days_late >= 30 ? "font-semibold text-red-600" : ""}>{r.worst_days_late}d</span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {timeliness.rows.length > 10 && (
+                  <p className="mt-2 text-xs text-slate-400">Worst 10 shown, sorted by the longest overdue payment. Export for the full list.</p>
+                )}
+              </div>
+            )}
+          </CardBody>
+        </Card>
+      </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <Card>

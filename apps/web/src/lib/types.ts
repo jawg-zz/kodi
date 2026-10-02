@@ -326,6 +326,7 @@ export interface ArrearsRow {
   tenant_id: string;
   tenant_name: string;
   phone: string;
+  account_code: string;
   property_id: string | null;
   property_name: string;
   balance: number;
@@ -333,6 +334,7 @@ export interface ArrearsRow {
   oldest_month: string;
   oldest_due_date: string;
   bucket: AgingBucket;
+  last_payment_at: string | null;
 }
 
 export interface ArrearsAging {
@@ -460,4 +462,33 @@ export interface DepositsAndCredits {
   settlements_count: number;
   credit_balance_total: number;
   tenants_with_credit: number;
+}
+
+export interface PropertyCollectionRow {
+  property_id: string | null;
+  property_name: string;
+  units: number;
+  occupied: number;
+  expected: number;
+  collected: number;
+  outstanding: number;
+  rate: number;
+  invoice_count: number;
+}
+
+export interface PaymentTimelinessRow {
+  tenant_id: string;
+  tenant_name: string;
+  paid_count: number;
+  on_time_count: number;
+  late_count: number;
+  avg_days_late: number;
+  worst_days_late: number;
+}
+
+export interface PaymentTimeliness {
+  paid_invoices: number;
+  on_time_rate: number;
+  avg_days_late: number;
+  rows: PaymentTimelinessRow[];
 }

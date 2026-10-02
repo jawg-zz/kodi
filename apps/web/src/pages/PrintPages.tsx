@@ -9,6 +9,7 @@ import {
   getSettlement,
   getTenant,
   getTenantCredit,
+  listInvoices,
   listTenantInvoices,
   listTenantPayments,
   mintInvoiceQr,
@@ -392,6 +393,80 @@ export function SettlementDocPage() {
         <div className="border-t border-slate-400 pt-2">Landlord signature & date</div>
         <div className="border-t border-slate-400 pt-2">Tenant signature & date</div>
       </div>
+    </DocShell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Month rent book: every invoice for one month, with paid/balance columns
+// and a signature line — the caretaker's door-to-door collection sheet.
+// ---------------------------------------------------------------------------
+export function RentBookDocPage() {
+  const { month } = useParams<{ month: string }>();
+  const { org } = useAuth();
+  const [invoices, setInvoices] = useState<InvoiceWithRefs[]>([]);
+  const [orgName, setOrgName] = useState("Kodi");
+  const [paybill, setPaybill] = useState<{ shortcode: string; account_code: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!org || !month) return;
+    (async () => {
+      try {
+        const rows = await listInvoices(org.id, month);
+        setInvoices(rows);
+        setOrgName(await fetchOrgName(org.name ?? null));
+        if (rows[0]) {
+          const pb = await getPaybillInfo(rows[0].tenant_id).catch(() => null);
+          if (pb?.registered && pb.account_code) setPaybill({ shortcode: pb.shortcode, account_code: pb.account_code });
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+  }, [org?.id, month]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (error) return <div className="p-10"><ErrorBanner message={error} /></div>;
+  if (invoices.length === 0) return <div className="p-10"><Loading label="Loading rent book…" /></div>;
+
+  const totalBilled = invoices.reduce((s, i) => s + i.total, 0);
+  const totalPaid = invoices.reduce((s, i) => s + (i.total - i.balance), 0);
+  const totalBalance = invoices.reduce((s, i) => s + i.balance, 0);
+
+  return (
+    <DocShell orgName={orgName} title={`Rent book — ${monthLabel(month ?? "")}`}>
+      <div className="mt-3 flex flex-wrap justify-between text-sm text-slate-600">
+        <span>{invoices.length} invoices</span>
+        <span>Due dates fall in {monthLabel(month ?? "")}</span>
+      </div>
+      <Table
+        head={["Unit", "Tenant", "Due", "Total", "Paid", "Balance", "Received by"]}
+        rows={invoices.map((i) => [
+          i.unit?.label ?? "—",
+          i.tenant?.full_name ?? "—",
+          formatDate(i.due_date),
+          <Money key="t" value={i.total} />,
+          <Money key="p" value={i.total - i.balance} />,
+          <Money key="b" value={i.balance} className={i.balance > 0 ? "font-semibold" : ""} />,
+          <span key="s" className="block w-24 border-b border-slate-300" aria-hidden="true" />,
+        ])}
+      />
+      <Table
+        head={["Totals", "Amount"]}
+        rows={[
+          ["Billed", <Money key="b" value={totalBilled} />],
+          ["Paid", <Money key="p" value={totalPaid} />],
+          ["Balance due", <Money key="r" value={totalBalance} className="font-bold" />],
+        ]}
+      />
+      {paybill && (
+        <p className="mt-3 text-sm text-slate-600">
+          Pay via M-Pesa Paybill <strong>{paybill.shortcode}</strong>, account code as shown per unit.
+        </p>
+      )}
+      <p className="mt-2 text-xs text-slate-400">
+        Countersign each line when collecting cash, then record it in Kodi the same day.
+      </p>
     </DocShell>
   );
 }

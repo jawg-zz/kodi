@@ -29,8 +29,10 @@ import type {
   PaymentAlert,
   PaymentRecordResult,
   PaymentsBreakdown,
+  PaymentTimeliness,
   PaymentWithRefs,
   Property,
+  PropertyCollectionRow,
   RentRoll,
   SettlementPayout,
   ShortcodeCheck,
@@ -1787,6 +1789,7 @@ function toArrearsAging(r: any): ArrearsAging {
       tenant_id: x.tenantId,
       tenant_name: x.tenantName,
       phone: x.phone,
+      account_code: x.accountCode ?? "",
       property_id: x.propertyId ?? null,
       property_name: x.propertyName,
       balance: x.balance,
@@ -1794,11 +1797,64 @@ function toArrearsAging(r: any): ArrearsAging {
       oldest_month: x.oldestMonth,
       oldest_due_date: x.oldestDueDate,
       bucket: x.bucket,
+      last_payment_at: x.lastPaymentAt ? iso(x.lastPaymentAt) : null,
     })),
     buckets: r.buckets ?? [],
     total_balance: r.totalBalance,
     tenants_in_arrears: r.tenantsInArrears,
   };
+}
+
+/** Per-property collection over the window (cash basis). */
+export async function getPropertyCollection(args: {
+  orgId: string;
+  startMonth: string;
+  endMonth: string;
+}): Promise<PropertyCollectionRow[]> {
+  try {
+    const res = (await convex.query((api as any).reports.propertyCollection, args)) as any;
+    return (res.rows ?? []).map((x: any) => ({
+      property_id: x.propertyId ?? null,
+      property_name: x.propertyName,
+      units: x.units,
+      occupied: x.occupied,
+      expected: x.expected,
+      collected: x.collected,
+      outstanding: x.outstanding,
+      rate: x.rate,
+      invoice_count: x.invoiceCount,
+    }));
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** On-time payment behaviour per tenant over the window. */
+export async function getPaymentTimeliness(args: {
+  orgId: string;
+  startMonth: string;
+  endMonth: string;
+  propertyId?: string;
+}): Promise<PaymentTimeliness> {
+  try {
+    const r = (await convex.query((api as any).reports.paymentTimeliness, args)) as any;
+    return {
+      paid_invoices: r.paidInvoices,
+      on_time_rate: r.onTimeRate,
+      avg_days_late: r.avgDaysLate,
+      rows: (r.rows ?? []).map((x: any) => ({
+        tenant_id: x.tenantId,
+        tenant_name: x.tenantName,
+        paid_count: x.paidCount,
+        on_time_count: x.onTimeCount,
+        late_count: x.lateCount,
+        avg_days_late: x.avgDaysLate,
+        worst_days_late: x.worstDaysLate,
+      })),
+    };
+  } catch (e) {
+    return err(e);
+  }
 }
 
 function toPaymentsBreakdown(r: any): PaymentsBreakdown {

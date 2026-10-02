@@ -124,7 +124,17 @@ export function InvoicesPage() {
             </button>
           )}
         </div>
-        <Button onClick={handleGenerate} disabled={busy}>{busy ? "Generating…" : "Generate invoices"}</Button>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            to={`/print/rent-book/${month}`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-10 items-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Print rent book
+          </Link>
+          <Button onClick={handleGenerate} disabled={busy}>{busy ? "Generating…" : "Generate invoices"}</Button>
+        </div>
       </div>
 
       <div className="mb-5 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200 sm:grid-cols-4">

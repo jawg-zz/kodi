@@ -233,6 +233,7 @@ const arrearsRow = v.object({
   tenantId: v.id("tenants"),
   tenantName: v.string(),
   phone: v.string(),
+  accountCode: v.string(),
   propertyId: v.optional(v.id("properties")),
   propertyName: v.string(),
   balance: v.number(),
@@ -240,6 +241,7 @@ const arrearsRow = v.object({
   oldestMonth: v.string(),
   oldestDueDate: v.string(),
   bucket: bucketValidator,
+  lastPaymentAt: v.optional(v.number()),
 });
 
 const bucketTotal = v.object({
@@ -310,6 +312,7 @@ export const arrearsAging = query({
       tenantId: Id<"tenants">;
       tenantName: string;
       phone: string;
+      accountCode: string;
       propertyId?: Id<"properties">;
       propertyName: string;
       balance: number;
@@ -317,6 +320,7 @@ export const arrearsAging = query({
       oldestMonth: string;
       oldestDueDate: string;
       bucket: Bucket;
+      lastPaymentAt?: number;
     }[] = [];
     const bucketSums = new Map<Bucket, { balance: number; count: number }>([
       ["Current", { balance: 0, count: 0 }],
@@ -334,10 +338,19 @@ export const arrearsAging = query({
       const b = bucketSums.get(bucket)!;
       b.balance += agg.balance;
       b.count += 1;
+      // Last payment feeds the follow-up list: "owed since March, last
+      // paid January" changes the conversation vs a silent non-payer.
+      const recentPayments = await ctx.db
+        .query("payments")
+        .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+        .order("desc")
+        .take(10);
+      const lastActive = recentPayments.find((p) => (p.status ?? "active") === "active");
       rows.push({
         tenantId,
         tenantName: tenant.full_name,
         phone: tenant.phone,
+        accountCode: tenant.accountCode,
         propertyId: propId,
         propertyName: property?.name ?? "—",
         balance: agg.balance,
@@ -345,6 +358,7 @@ export const arrearsAging = query({
         oldestMonth: agg.oldestMonth,
         oldestDueDate: agg.oldestDueDate,
         bucket,
+        lastPaymentAt: lastActive?.paidAt,
       });
     }
     rows.sort((a, b) => b.balance - a.balance);
@@ -824,6 +838,247 @@ export const depositsAndCredits = query({
       settlementsCount: scopedSettlements.length,
       creditBalanceTotal: scopedCredits.reduce((s, c) => s + c.balance, 0),
       tenantsWithCredit: scopedCredits.length,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Property performance: how each building collects over the window
+// ---------------------------------------------------------------------------
+const propertyCollectionRow = v.object({
+  propertyId: v.optional(v.id("properties")),
+  propertyName: v.string(),
+  units: v.number(),
+  occupied: v.number(),
+  expected: v.number(),
+  collected: v.number(),
+  outstanding: v.number(),
+  rate: v.number(),
+  invoiceCount: v.number(),
+});
+
+/**
+ * Per-property collection for the month window, cash basis like
+ * collectionSummary. Answers "which building pays and which doesn't" —
+ * the comparison a multi-property owner actually makes. Invoices whose
+ * unit is unknown (or absent) roll into an "Unassigned" row so totals
+ * always reconcile with the org-wide summary.
+ */
+export const propertyCollection = query({
+  args: {
+    orgId: v.id("orgs"),
+    startMonth: v.string(),
+    endMonth: v.string(),
+  },
+  returns: v.object({ rows: v.array(propertyCollectionRow) }),
+  handler: async (ctx, args) => {
+    await assertStaff(ctx, args.orgId);
+    const months = expandMonths(args.startMonth, args.endMonth);
+
+    const properties = await ctx.db
+      .query("properties")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const units = await ctx.db
+      .query("units")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const unitProps = new Map<Id<"units">, Id<"properties">>();
+    const perProperty = new Map<
+      Id<"properties"> | "unassigned",
+      { units: number; occupied: number; expected: number; collected: number; outstanding: number; invoiceCount: number }
+    >();
+    const blank = () => ({ units: 0, occupied: 0, expected: 0, collected: 0, outstanding: 0, invoiceCount: 0 });
+    for (const p of properties) perProperty.set(p._id, blank());
+    perProperty.set("unassigned", blank());
+    for (const u of units) {
+      const agg = perProperty.get(u.propertyId);
+      if (agg === undefined) continue;
+      agg.units += 1;
+      if (u.status === "occupied") agg.occupied += 1;
+      unitProps.set(u._id, u.propertyId);
+    }
+
+    for (const m of months) {
+      const rows = await ctx.db
+        .query("invoices")
+        .withIndex("by_org_month", (q) => q.eq("orgId", args.orgId).eq("month", m))
+        .collect();
+      for (const inv of rows) {
+        const key =
+          (inv.unitId !== undefined ? unitProps.get(inv.unitId) : undefined) ?? "unassigned";
+        const agg = perProperty.get(key);
+        if (agg === undefined) continue;
+        agg.expected += inv.total;
+        agg.outstanding += inv.balance;
+        agg.invoiceCount += 1;
+      }
+    }
+
+    const tenants = await ctx.db
+      .query("tenants")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const tenantUnit = new Map(tenants.map((t) => [t._id, t.unitId]));
+    const startMs = monthStartMs(months[0]);
+    const endMs = monthStartMs(addMonthsKey(months[months.length - 1], 1));
+    const payments = await ctx.db
+      .query("payments")
+      .withIndex("by_org_paidAt", (q) =>
+        q.eq("orgId", args.orgId).gte("paidAt", startMs).lt("paidAt", endMs),
+      )
+      .collect();
+    for (const p of payments) {
+      if ((p.status ?? "active") !== "active") continue;
+      const unitId = tenantUnit.get(p.tenantId);
+      const key = (unitId !== undefined ? unitProps.get(unitId) : undefined) ?? "unassigned";
+      const agg = perProperty.get(key);
+      if (agg !== undefined) agg.collected += p.amount;
+    }
+
+    const nameOf = new Map(properties.map((p) => [p._id, p.name]));
+    const rows = [...perProperty.entries()]
+      .map(([key, agg]) => ({
+        propertyId: key === "unassigned" ? undefined : (key as Id<"properties">),
+        propertyName: key === "unassigned" ? "Unassigned" : (nameOf.get(key as Id<"properties">) ?? "—"),
+        units: agg.units,
+        occupied: agg.occupied,
+        expected: agg.expected,
+        collected: agg.collected,
+        outstanding: agg.outstanding,
+        rate: pct(agg.collected, agg.expected),
+        invoiceCount: agg.invoiceCount,
+      }))
+      .filter((r) => r.units > 0 || r.invoiceCount > 0);
+    rows.sort((a, b) => b.collected - a.collected);
+    return { rows: rows as never };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Payment timeliness: who pays on time, who pays late, by how much
+// ---------------------------------------------------------------------------
+const timelinessRow = v.object({
+  tenantId: v.id("tenants"),
+  tenantName: v.string(),
+  paidCount: v.number(),
+  onTimeCount: v.number(),
+  lateCount: v.number(),
+  avgDaysLate: v.number(),
+  worstDaysLate: v.number(),
+});
+
+/**
+ * On-time behaviour per tenant over the window. An invoice counts once
+ * it has any active payment allocated to it; lateness is measured from
+ * the FIRST payment that touched the invoice (a partial on the 3rd and
+ * the balance a month later is still one on-time start). Same-day or
+ * earlier is on time. Powers keep/chase decisions, not scoring theater.
+ */
+export const paymentTimeliness = query({
+  args: {
+    orgId: v.id("orgs"),
+    startMonth: v.string(),
+    endMonth: v.string(),
+    propertyId: propertyIdArg,
+  },
+  returns: v.object({
+    paidInvoices: v.number(),
+    onTimeRate: v.number(),
+    avgDaysLate: v.number(),
+    rows: v.array(timelinessRow),
+  }),
+  handler: async (ctx, args) => {
+    await assertStaff(ctx, args.orgId);
+    await assertPropertyInOrg(ctx, args.orgId, args.propertyId);
+    const months = expandMonths(args.startMonth, args.endMonth);
+    const unitProps = await unitPropertyMap(ctx, args.orgId, args.propertyId);
+    const inScope = (unitId?: Id<"units">): boolean => {
+      if (args.propertyId === undefined) return true;
+      return unitId !== undefined && unitProps.has(unitId);
+    };
+
+    const invoices = [];
+    for (const m of months) {
+      const rows = await ctx.db
+        .query("invoices")
+        .withIndex("by_org_month", (q) => q.eq("orgId", args.orgId).eq("month", m))
+        .collect();
+      for (const inv of rows) {
+        if (!inScope(inv.unitId)) continue;
+        invoices.push(inv);
+      }
+    }
+    const invoiceById = new Map(invoices.map((i) => [i._id, i]));
+
+    const firstPaidAt = new Map<Id<"invoices">, number>();
+    if (invoices.length > 0) {
+      const startMs = monthStartMs(months[0]);
+      const payments = await ctx.db
+        .query("payments")
+        .withIndex("by_org_paidAt", (q) =>
+          q.eq("orgId", args.orgId).gte("paidAt", startMs),
+        )
+        .collect();
+      for (const p of payments) {
+        if ((p.status ?? "active") !== "active") continue;
+        for (const a of p.allocations) {
+          if (!invoiceById.has(a.invoiceId)) continue;
+          const cur = firstPaidAt.get(a.invoiceId);
+          if (cur === undefined || p.paidAt < cur) firstPaidAt.set(a.invoiceId, p.paidAt);
+        }
+      }
+    }
+
+    const tenants = await ctx.db
+      .query("tenants")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const tenantById = new Map(tenants.map((t) => [t._id, t]));
+
+    type Agg = { paid: number; onTime: number; lateSum: number; worst: number };
+    const byTenant = new Map<Id<"tenants">, Agg>();
+    let totalLateDays = 0;
+    let lateInvoices = 0;
+    for (const [invoiceId, paidAt] of firstPaidAt) {
+      const inv = invoiceById.get(invoiceId);
+      if (inv === undefined) continue;
+      const due = Date.parse(`${inv.dueDate}T23:59:59Z`);
+      const daysLate = Number.isNaN(due)
+        ? 0
+        : Math.max(0, Math.floor((paidAt - due) / DAY_MS));
+      const agg = byTenant.get(inv.tenantId) ?? { paid: 0, onTime: 0, lateSum: 0, worst: 0 };
+      agg.paid += 1;
+      if (daysLate === 0) {
+        agg.onTime += 1;
+      } else {
+        agg.lateSum += daysLate;
+        agg.worst = Math.max(agg.worst, daysLate);
+        totalLateDays += daysLate;
+        lateInvoices += 1;
+      }
+      byTenant.set(inv.tenantId, agg);
+    }
+
+    const rows = [...byTenant.entries()]
+      .filter(([id]) => tenantById.has(id))
+      .map(([id, agg]) => ({
+        tenantId: id,
+        tenantName: tenantById.get(id)?.full_name ?? "—",
+        paidCount: agg.paid,
+        onTimeCount: agg.onTime,
+        lateCount: agg.paid - agg.onTime,
+        avgDaysLate: agg.lateSum > 0 ? Math.round((agg.lateSum / (agg.paid - agg.onTime)) * 10) / 10 : 0,
+        worstDaysLate: agg.worst,
+      }))
+      .sort((a, b) => b.worstDaysLate - a.worstDaysLate || b.lateCount - a.lateCount);
+    const paidInvoices = firstPaidAt.size;
+    const onTime = paidInvoices - lateInvoices;
+    return {
+      paidInvoices,
+      onTimeRate: pct(onTime, paidInvoices),
+      avgDaysLate: lateInvoices > 0 ? Math.round((totalLateDays / lateInvoices) * 10) / 10 : 0,
+      rows: rows as never,
     };
   },
 });
