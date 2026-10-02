@@ -12,7 +12,7 @@ import {
   siteBaseUrl,
   stkPassword,
 } from "./lib/auth";
-import { cachedDarajaToken, darajaBase } from "./lib/daraja";
+import { cachedDarajaToken, darajaBase, mintFreshDarajaToken } from "./lib/daraja";
 import { classifyStkCode } from "./lib/stkOutcome";
 import { encryptSecret } from "./lib/mpesaCrypto";
 import { inspectInitiatorCert } from "./lib/initiator";
@@ -357,51 +357,89 @@ export const stkInitiate = action({
     }
     const callbackUrl = `${siteBase}/stk-callback`;
     const base = darajaBase(creds.environment);
-    const token = await cachedDarajaToken(ctx, caller.orgId, creds);
+    let token = await cachedDarajaToken(ctx, caller.orgId, creds);
     const timestamp = darajaTimestamp();
-    const stkRes = await fetch(`${base}/mpesa/stkpush/v1/processrequest`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      signal: AbortSignal.timeout(30_000),
-      body: JSON.stringify({
-        BusinessShortCode: creds.shortcode,
-        Password: stkPassword(creds.shortcode, creds.passkey, timestamp),
-        Timestamp: timestamp,
-        TransactionType: "CustomerPayBillOnline",
-        Amount: amount,
-        PartyA: phone,
-        PartyB: creds.shortcode,
-        PhoneNumber: phone,
-        CallBackURL: callbackUrl,
-        AccountReference: args.tenantId.slice(0, 12),
-        TransactionDesc: "Rent payment",
-      }),
-    });
-    const stk = (await stkRes.json()) as {
-      ResponseCode?: string;
-      ResponseDescription?: string;
-      CheckoutRequestID?: string;
-      MerchantRequestID?: string;
+
+    const pushStk = async (bearer: string) => {
+      const res = await fetch(`${base}/mpesa/stkpush/v1/processrequest`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearer}`,
+          "Content-Type": "application/json",
+        },
+        signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({
+          BusinessShortCode: creds.shortcode,
+          Password: stkPassword(creds.shortcode, creds.passkey, timestamp),
+          Timestamp: timestamp,
+          TransactionType: "CustomerPayBillOnline",
+          Amount: amount,
+          PartyA: phone,
+          PartyB: creds.shortcode,
+          PhoneNumber: phone,
+          CallBackURL: callbackUrl,
+          AccountReference: args.tenantId.slice(0, 12),
+          TransactionDesc: "Rent payment",
+        }),
+      });
+      // Read as text first: gateway/product errors and some rejections do
+      // not follow the ResponseCode envelope — sometimes not JSON at all.
+      const raw = await res.text();
+      return { res, raw };
     };
-    if (stk.ResponseCode !== "0" || !stk.CheckoutRequestID) {
-      throw new ConvexError(
-        stk.ResponseDescription ?? "STK Push was rejected by Daraja",
-      );
+
+    let { res, raw } = await pushStk(token);
+    if (res.status === 401) {
+      // Daraja kills the previous token on every mint, so a cached token can
+      // be server-side dead while looking fresh. Mint once and retry.
+      token = await mintFreshDarajaToken(ctx, caller.orgId, creds);
+      ({ res, raw } = await pushStk(token));
+    }
+    console.log(`[stkInitiate] Daraja ${res.status} ${raw.slice(0, 300)}`);
+    let stk: Record<string, unknown> = {};
+    try {
+      stk = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      // Failure path below reports the raw excerpt.
+    }
+    const strField = (...keys: string[]): string | undefined => {
+      for (const k of keys) {
+        const v = stk[k];
+        if (typeof v === "string" && v !== "") return v;
+      }
+      return undefined;
+    };
+    const responseDescription = strField("ResponseDescription");
+    const checkoutRequestId = strField("CheckoutRequestID");
+    const merchantRequestId = strField("MerchantRequestID");
+    const errorCode = strField("errorCode", "ErrorCode");
+    const errorMessage = strField("errorMessage", "ErrorMessage");
+
+    if (!res.ok || strField("ResponseCode") !== "0" || !checkoutRequestId) {
+      if (/no apiproduct match/i.test(raw.slice(0, 500))) {
+        throw new ConvexError(
+          "STK Push: your Daraja app isn't subscribed to the Lipa na M-Pesa Online product — subscribe it to the app on developer.safaricom.co.ke, then retry.",
+        );
+      }
+      const main = responseDescription ?? errorMessage;
+      const reason = main
+        ? errorCode
+          ? `${main} (${errorCode})`
+          : main
+        : `HTTP ${res.status} with an unreadable body: ${raw.slice(0, 160) || "(empty)"}`;
+      throw new ConvexError(`STK Push was rejected by Daraja — ${reason}`);
     }
     await ctx.runMutation(internal.mpesaInternal.insertTx, {
       orgId: caller.orgId,
       tenantId: args.tenantId,
-      checkoutRequestId: stk.CheckoutRequestID,
-      merchantRequestId: stk.MerchantRequestID,
+      checkoutRequestId,
+      merchantRequestId,
       phone,
       amount,
       initiatedBy: caller.userId,
       idempotencyKey: idem,
     });
-    return { checkoutRequestId: stk.CheckoutRequestID };
+    return { checkoutRequestId };
   },
 });
 
