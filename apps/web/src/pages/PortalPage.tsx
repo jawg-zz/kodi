@@ -92,6 +92,16 @@ export function PortalPage() {
 
   return (
     <div className="space-y-4">
+      {invoices.length === 0 && payments.length === 0 && (
+        <Card>
+          <CardBody>
+            <p className="text-sm text-slate-600">
+              Welcome{tenant ? `, ${tenant.full_name.split(" ")[0]}` : ""} — you're all set. When your
+              landlord adds your rent it shows up here, and you can pay it by M-Pesa straight from this page.
+            </p>
+          </CardBody>
+        </Card>
+      )}
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat label="Balance owed" value={formatKES(netOwed)} accent={netOwed > 0 ? "red" : "green"} sub={oldest ? `oldest: ${monthLabel(oldest.month)}` : credit > 0 ? "all paid up — credit held" : "all paid up"} />
         <Stat label="Invoices" value={String(invoices.length)} sub={`${invoices.filter((i) => i.status === "paid").length} paid`} />

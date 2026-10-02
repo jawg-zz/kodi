@@ -1,9 +1,19 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { currentMonthKey, formatDate, formatKES, monthLabel } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
-import { generateInvoices, getMonthCashSnapshot, listInvoices, listPayments, listTenants, listUnits } from "../lib/api";
+import {
+  generateInvoices,
+  getMonthCashSnapshot,
+  getMpesaCreds,
+  listInvoices,
+  listPayments,
+  listTenants,
+  listUnits,
+} from "../lib/api";
 import { Button } from "../components/Button";
 import { Badge, Card, CardBody, EmptyState, ErrorBanner, PageHeader, Skeleton, Stat, TextLink } from "../components/ui";
+import { useToast } from "../components/Toast";
 import { InvoiceStatusBadge, Money, UnitStatusBadge } from "../components/domain";
 import type { InvoiceWithRefs, PaymentWithRefs, Tenant, UnitWithTenant } from "../lib/types";
 
@@ -55,14 +65,101 @@ function DashboardSkeleton() {
   );
 }
 
+function CheckCircle({ done, n }: { done: boolean; n: number }) {
+  return (
+    <span
+      className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+        done ? "bg-slate-900 text-white" : "border border-slate-300 text-slate-500"
+      }`}
+    >
+      {done ? (
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M3 8.5l3.5 3.5L13 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : (
+        n
+      )}
+    </span>
+  );
+}
+
+/** First-run screen: the three steps between signup and the first invoice. */
+function GettingStarted({ hasUnits, hasTenant, mpesaConfigured }: {
+  hasUnits: boolean;
+  hasTenant: boolean;
+  mpesaConfigured: boolean;
+}) {
+  const navigate = useNavigate();
+  const steps: { done: boolean; optional?: boolean; title: string; desc: string; cta: string; to: string }[] = [
+    {
+      done: hasUnits,
+      title: "Add a property",
+      desc: "Your building or plot, and its units with monthly rent.",
+      cta: "Add property",
+      to: "/app/properties",
+    },
+    {
+      done: hasTenant,
+      title: "Add your first tenant",
+      desc: "Assign them to a unit — rent tracking starts from move-in.",
+      cta: "Add tenant",
+      to: "/app/tenants",
+    },
+    {
+      done: mpesaConfigured,
+      optional: true,
+      title: "Connect M-Pesa",
+      desc: "Tenants get an STK prompt or a Paybill QR, and payments record themselves.",
+      cta: "Open settings",
+      to: "/app/settings",
+    },
+  ];
+  const nextIdx = steps.findIndex((s) => !s.done);
+
+  return (
+    <Card>
+      <CardBody>
+        <h2 className="font-semibold">Set up in three steps</h2>
+        <ol className="mt-4 space-y-4">
+          {steps.map((s, i) => (
+            <li key={s.title} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+              <div className="flex min-w-0 items-start gap-3">
+                <CheckCircle done={s.done} n={i + 1} />
+                <div className="min-w-0">
+                  <p className={`text-sm font-medium ${s.done ? "text-slate-400" : "text-slate-900"}`}>
+                    {s.title}
+                    {s.optional && <span className="ml-2 align-middle"><Badge tone="slate">optional</Badge></span>}
+                  </p>
+                  <p className={`mt-0.5 text-sm ${s.done ? "text-slate-400" : "text-slate-500"}`}>{s.desc}</p>
+                </div>
+              </div>
+              {!s.done && (
+                <Button
+                  size="sm"
+                  variant={i === nextIdx && !s.optional ? "primary" : "secondary"}
+                  onClick={() => navigate(s.to)}
+                >
+                  {s.cta}
+                </Button>
+              )}
+            </li>
+          ))}
+        </ol>
+      </CardBody>
+    </Card>
+  );
+}
+
 export function DashboardPage() {
   const { org } = useAuth();
+  const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [units, setUnits] = useState<UnitWithTenant[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [invoices, setInvoices] = useState<InvoiceWithRefs[]>([]);
   const [payments, setPayments] = useState<PaymentWithRefs[]>([]);
+  const [mpesa, setMpesa] = useState<{ configured: boolean } | null>(null);
   const [cash, setCash] = useState<{ collected: number; expected: number; outstanding: number } | null>(null);
 
   const month = currentMonthKey();
@@ -72,17 +169,19 @@ export function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const [u, t, inv, pay, snapshot] = await Promise.all([
+      const [u, t, inv, pay, snapshot, mp] = await Promise.all([
         listUnits(org.id),
         listTenants(org.id),
         listInvoices(org.id, month),
         listPayments(org.id),
         getMonthCashSnapshot(org.id, month).catch(() => null),
+        getMpesaCreds().catch(() => null),
       ]);
       setUnits(u);
       setTenants(t);
       setInvoices(inv);
       setPayments(pay.slice(0, 8));
+      setMpesa(mp);
       setCash(snapshot);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -99,7 +198,13 @@ export function DashboardPage() {
   const handleGenerate = async () => {
     if (!org) return;
     try {
-      await generateInvoices(org.id, month);
+      const n = await generateInvoices(org.id, month);
+      toast(
+        n === 0
+          ? "No occupied units to invoice yet — add tenants to their units first."
+          : `Generated ${n} invoice${n === 1 ? "" : "s"}.`,
+        n === 0 ? "info" : "success",
+      );
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -108,6 +213,56 @@ export function DashboardPage() {
 
   if (loading) return <DashboardSkeleton />;
   if (error) return <ErrorBanner message={error} onRetry={load} />;
+
+  // A brand-new org sees a checklist instead of a screen of zeros.
+  // Units (not properties) count: a tenant needs an actual unit to move into.
+  const hasUnits = units.length > 0;
+  const hasTenant = tenants.length > 0;
+  const setupDone = hasUnits && hasTenant;
+
+  if (!setupDone) {
+    return (
+      <div>
+        <PageHeader
+          title={org?.name ?? "Welcome"}
+          sub="Let's set up your rent collection — three quick steps."
+        />
+        <GettingStarted
+          hasUnits={hasUnits}
+          hasTenant={hasTenant}
+          mpesaConfigured={!!mpesa?.configured}
+        />
+        <p className="mt-4 text-xs text-slate-400">
+          You can change the business name, plan and M-Pesa details any time in Settings.
+        </p>
+      </div>
+    );
+  }
+
+  // Set up but nothing billed yet: one clear action instead of a 0% report.
+  if (invoices.length === 0) {
+    const occupied = units.filter((u) => u.status !== "vacant").length;
+    return (
+      <div>
+        <PageHeader title={monthLabel(month)} sub="Everything is set up" />
+        <Card>
+          <CardBody>
+            <h2 className="text-lg font-semibold">Ready to collect</h2>
+            <p className="mt-1 max-w-xl text-sm text-slate-500">
+              {occupied > 0
+                ? `${occupied} occupied unit${occupied === 1 ? "" : "s"} ready to bill. Generate ${monthLabel(month)} invoices and tenants can pay by M-Pesa — or you record cash as it comes.`
+                : `No occupied units yet. Assign a tenant to a unit, then generate ${monthLabel(month)} invoices to start collecting.`}
+            </p>
+            {occupied > 0 && (
+              <Button className="mt-4" onClick={handleGenerate}>
+                Generate {monthLabel(month)} invoices
+              </Button>
+            )}
+          </CardBody>
+        </Card>
+      </div>
+    );
+  }
 
   const expected = cash?.expected ?? invoices.reduce((s, i) => s + i.total, 0);
   const outstanding = cash?.outstanding ?? invoices.reduce((s, i) => s + i.balance, 0);
@@ -124,13 +279,7 @@ export function DashboardPage() {
       <PageHeader
         title={monthLabel(month)}
         sub={`${invoices.length} invoice${invoices.length === 1 ? "" : "s"} this month`}
-        actions={
-          invoices.length === 0 ? (
-            <Button onClick={handleGenerate}>Generate {monthLabel(month)} invoices</Button>
-          ) : (
-            <TextLink to="/app/invoices" className="self-center">View invoices</TextLink>
-          )
-        }
+        actions={<TextLink to="/app/invoices" className="self-center">View invoices</TextLink>}
       />
 
       {/* The month's headline: how much of the rent due has actually landed. */}
