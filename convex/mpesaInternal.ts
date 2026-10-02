@@ -458,3 +458,4 @@ export const getTenantAccountCode = internalQuery({
     return tenant?.accountCode ?? null;
   },
 });
+
