@@ -139,6 +139,25 @@ export const reconcileSuccessInternal = internalMutation({
     if (tx.paymentId !== undefined) {
       return { paymentId: tx.paymentId, deduplicated: true };
     }
+    // Cross-channel duplicate: an STK push to a Paybill also produces a C2B
+    // confirmation with the same receipt, and that confirmation can record
+    // the payment first (sender-phone hash match) before this callback runs.
+    // The tx row never got its link in that order — find the payment by
+    // receipt instead of recording the money twice.
+    if (args.mpesaReceipt !== undefined && args.mpesaReceipt !== "") {
+      const prior = await ctx.db
+        .query("payments")
+        .withIndex("by_org_code", (q) =>
+          q
+            .eq("orgId", args.orgId)
+            .eq("mpesaCode", args.mpesaReceipt as string),
+        )
+        .first();
+      if (prior !== null && (prior.status ?? "active") === "active") {
+        await ctx.db.patch(tx._id, { paymentId: prior._id });
+        return { paymentId: prior._id, deduplicated: true };
+      }
+    }
     const rounded = Math.round(args.amount);
     if (!Number.isFinite(rounded) || rounded <= 0) return null;
     const res = await recordPaymentCore(ctx, {

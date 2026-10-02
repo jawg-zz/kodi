@@ -8,6 +8,7 @@ import {
 } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { sha256Hex } from "./lib/sha256";
 import type { Id } from "./_generated/dataModel";
 import { assertOrgMember, assertOwner, assertStaff, audit, normalizePhone, siteBaseUrl } from "./lib/auth";
 import { cachedDarajaToken, darajaBase, isDarajaAuthDead, mintFreshDarajaToken } from "./lib/daraja";
@@ -161,12 +162,13 @@ function shortName(p: C2bPayload): string {
 }
 
 /**
- * C2B v2 masks the sender MSISDN (e.g. "2547***126") while v1 sent a
- * SHA-256 hash. Either way the full number is unrecoverable, so phone
- * matching is prefix+suffix pattern matching:
- *  - "2547***126" → tenants whose phone starts 2547 and ends 126;
- *  - a full 12-digit number (sandbox simulator, legacy hits) → exact match;
- *  - a 64-hex hash (v1 residue) → unmatchable, skip the layer cleanly.
+ * Sender-phone matching across the three MSISDN shapes Daraja sends:
+ *  - full 12-digit number (sandbox simulator, legacy hits) → exact match;
+ *  - "2547***126" (C2B v2 mask) → prefix+suffix pattern fit;
+ *  - 64-hex SHA-256 of the international MSISDN (confirmed LIVE on
+ *    production shortcode confirmations, 2026-10-02 — not a "v1 residue").
+ *    The hash is one-way but deterministic, so hashing the candidate phone
+ *    the same way is an exact match.
  * A pattern hit counts as a hint (suggestions, anomaly history), never a
  * sole auto-match key unless exactly one tenant fits.
  */
@@ -176,6 +178,17 @@ export function msisdnMatch(
 ): "exact" | "pattern" | "none" {
   const digits = raw.replace(/\D/g, "");
   if (digits !== "" && digits === phone.replace(/\D/g, "")) return "exact";
+  if (/^[0-9a-f]{64}$/i.test(raw)) {
+    const p = phone.replace(/\D/g, "");
+    if (p === "") return "none";
+    const hash = raw.toLowerCase();
+    // Stored phones are normalized to 2547XXXXXXXX; also accept the
+    // 07-prefixed variant in case a legacy row stores local format.
+    const alt = p.startsWith("254") ? `0${p.slice(3)}` : p;
+    if (sha256Hex(p) === hash) return "exact";
+    if (alt !== p && sha256Hex(alt) === hash) return "exact";
+    return "none";
+  }
   const m = raw.match(/^(\d{3,5})\*+(\d{2,4})$/);
   if (m === null) return "none";
   const [, prefix, suffix] = m;
@@ -566,6 +579,24 @@ export const bulkMatchC2bByPhone = mutation({
         skipped += 1;
         continue;
       }
+      // Cross-channel duplicate: the TransID already settled via STK. Link
+      // the row to the existing payment — never a second ledger write.
+      const prior = await ctx.db
+        .query("payments")
+        .withIndex("by_org_code", (q) =>
+          q.eq("orgId", args.orgId).eq("mpesaCode", row.transId),
+        )
+        .first();
+      if (prior !== null && (prior.status ?? "active") === "active") {
+        await ctx.db.patch(row._id, {
+          tenantId: prior.tenantId,
+          status: "matched",
+          matchReason: `duplicate notification for ${prior.receiptNo} — already recorded, no second entry`,
+          paymentId: prior._id,
+        });
+        matched += 1;
+        continue;
+      }
       const res = await recordPaymentCore(ctx, {
         orgId: args.orgId,
         tenantId: tenant._id,
@@ -838,6 +869,24 @@ export const matchC2bPayment = mutation({
     const tenant = await ctx.db.get(args.tenantId);
     if (tenant === null || tenant.orgId !== row.orgId) {
       throw new ConvexError("Tenant not found in this organization");
+    }
+    // Cross-channel duplicate: an active payment with this TransID already
+    // exists (STK callback won the race). Record again and the money counts
+    // twice — link instead, same as the automatic path does.
+    const prior = await ctx.db
+      .query("payments")
+      .withIndex("by_org_code", (q) =>
+        q.eq("orgId", row.orgId).eq("mpesaCode", row.transId),
+      )
+      .first();
+    if (prior !== null && (prior.status ?? "active") === "active") {
+      await ctx.db.patch(args.id, {
+        tenantId: prior.tenantId,
+        status: "matched",
+        matchReason: `duplicate notification for ${prior.receiptNo} — already recorded, no second entry`,
+        paymentId: prior._id,
+      });
+      return prior._id;
     }
     const res = await recordPaymentCore(ctx, {
       orgId: row.orgId,
@@ -1271,8 +1320,8 @@ export const registerC2bUrls = action({
     const token = await cachedDarajaToken(ctx, caller.orgId, creds);
     const confirmUrl = `${siteBase}/c2b-confirmation`;
     const validUrl = `${siteBase}/c2b-validation`;
-    // C2B v2 (current per Daraja 3.0 docs): payloads carry a masked MSISDN
-    // (2547***126) instead of v1's SHA-256 hash — see msisdnMatch below.
+    // MSISDN shape varies by shortcode: this production one sends v1-style
+    // SHA-256 hashes; masked 2547***126 also occurs — see msisdnMatch below.
     const postRegister = async (bearer: string) => {
       const res = await fetch(`${base}/mpesa/c2b/v2/registerurl`, {
         method: "POST",
@@ -1810,5 +1859,6 @@ export const simulateC2b = query({
     };
   },
 });
+
 
 export { c2bShape, parseAmount };

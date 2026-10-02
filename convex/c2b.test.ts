@@ -10,6 +10,7 @@ import * as invoices from "./invoices";
 import * as tenants from "./tenants";
 import * as mpesaInternal from "./mpesaInternal";
 import * as helpers from "./helpers";
+import * as sha256 from "./lib/sha256";
 
 const modules = {
   "./_generated/api.js": () => Promise.resolve({}),
@@ -20,6 +21,7 @@ const modules = {
   "./tenants.js": () => Promise.resolve(tenants),
   "./mpesaInternal.js": () => Promise.resolve(mpesaInternal),
   "./helpers.js": () => Promise.resolve(helpers),
+  "./lib/sha256.js": () => Promise.resolve(sha256),
 };
 
 const STAFF = { subject: "staff-1" };
@@ -676,6 +678,70 @@ test("msisdnMatch grades exact, pattern, and none", async () => {
   expect(msisdnMatch("2547***002", "254700000001")).toBe("none");
   expect(msisdnMatch("94c2c311d522da950619227b3361752a42042db7e1e699b26e628305c68a88", "254700000001")).toBe("none");
   expect(msisdnMatch("", "254700000001")).toBe("none");
+});
+
+test("msisdnMatch resolves Daraja SHA-256 sender hashes", async () => {
+  const { msisdnMatch } = await import("./c2b");
+  // sha256("254700000001") — the production confirmation shape (live-verified).
+  const hash = "172509f6416f41d1ce3b78a757c1d4ce90fc1ab1c9d4cdf1edf25ab7bf3fbdfd";
+  expect(msisdnMatch(hash, "254700000001")).toBe("exact");
+  expect(msisdnMatch(hash, "254700000002")).toBe("none");
+  // A tenant stored in legacy 07-format still matches the hash of its
+  // international form.
+  expect(msisdnMatch(sha256.sha256Hex("0700000001"), "0700000001")).toBe("exact");
+  expect(msisdnMatch(hash, "0700000001")).toBe("none");
+});
+
+test("v1 hashed sender auto-matches a lone exact fit", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId, asStaff } = await seedOrg(t);
+  const { tenantId, unitId } = await seedTenant(t, orgId);
+  await seedInvoice(t, orgId, tenantId, unitId);
+  const res = await confirm(t, {
+    transId: "TRX-HASH1",
+    billRef: "WRONG",
+    msisdn: sha256.sha256Hex("254700000001"),
+  });
+  expect(res.status).toBe("matched");
+  const rows = await asStaff.query(api.c2b.listC2bPayments, { orgId });
+  expect(rows.find((r) => r.transId === "TRX-HASH1")?.matchReason).toContain("sender phone");
+});
+
+test("C2B confirmation then STK callback records the money once", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId, asStaff } = await seedOrg(t);
+  const { tenantId, unitId } = await seedTenant(t, orgId);
+  await seedInvoice(t, orgId, tenantId, unitId);
+  // C2B confirmation lands first and hash-matches the sender.
+  const res = await confirm(t, {
+    transId: "TRX-RACE1",
+    billRef: "WRONG",
+    msisdn: sha256.sha256Hex("254700000001"),
+  });
+  expect(res.status).toBe("matched");
+  // The STK callback arrives afterwards with the same receipt.
+  const reconcile = await t.run(async (ctx) => {
+    await ctx.db.insert("mpesaTransactions", {
+      orgId,
+      tenantId,
+      checkoutRequestId: "co-RACE1",
+      phone: "254700000001",
+      amount: 20800,
+      status: "pending",
+      initiatedBy: "staff-1",
+    });
+    return ctx.runMutation(internal.mpesaInternal.reconcileSuccessInternal, {
+      orgId,
+      tenantId,
+      checkoutRequestId: "co-RACE1",
+      amount: 20800,
+      mpesaReceipt: "TRX-RACE1",
+    });
+  });
+  expect(reconcile).not.toBeNull();
+  expect(reconcile!.deduplicated).toBe(true);
+  const pays = await asStaff.query(api.payments.listPayments, { orgId });
+  expect(pays.length).toBe(1);
 });
 
 test("v2 masked number auto-matches a lone pattern fit", async () => {
