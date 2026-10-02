@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { addMonths, currentMonthKey, monthLabel } from "@kodi/shared";
+import { addMonths, currentMonthKey, formatKES, monthLabel } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import { generateInvoices, getInvoice, getInvoiceQr, getPaybillInfo, listInvoices, listTenants, mintInvoiceQr, updateInvoice } from "../lib/api";
 import type { InvoiceQr, InvoiceWithRefs, Tenant } from "../lib/types";
 import { downloadQr, shareQrImage, whatsappTextLink } from "../lib/share";
 import { Button } from "../components/Button";
-import { Field, Input, Select } from "../components/Field";
-import { Card, EmptyState, ErrorBanner, Loading, PageHeader } from "../components/ui";
+import { Field, Input } from "../components/Field";
+import { Card, EmptyState, ErrorBanner, Loading } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { InvoiceStatusBadge, LinesBreakdown, Money } from "../components/domain";
 import { RecordPaymentFields } from "../components/RecordPaymentForm";
@@ -70,35 +70,82 @@ export function InvoicesPage() {
 
   const tenantName = (id: string) => tenants.find((t) => t.id === id)?.full_name ?? "—";
   const shown = invoices.filter((i) => status === "all" || i.status === status);
-  const totalOutstanding = shown.reduce((s, i) => s + i.balance, 0);
 
   const prev = addMonths(month, -1);
   const next = addMonths(month, 1);
 
+  // The band is the filter: each cell shows a slice of the month and
+  // clicking it filters the table. Figures always describe the whole
+  // month regardless of the active filter.
+  const countBy = (st: string) => invoices.filter((i) => i.status === st).length;
+  const balanceBy = (st: string) =>
+    invoices.filter((i) => i.status === st).reduce((s, i) => s + i.balance, 0);
+  const billedTotal = invoices.reduce((s, i) => s + i.total, 0);
+  const collectedTotal = invoices.reduce((s, i) => s + (i.total - i.balance), 0);
+  const filterCells = [
+    { key: "all", label: `${invoices.length} invoice${invoices.length === 1 ? "" : "s"}`, sub: `${formatKES(billedTotal)} billed` },
+    { key: "unpaid", label: `${countBy("unpaid")} unpaid`, sub: `${formatKES(balanceBy("unpaid"))} due` },
+    { key: "partial", label: `${countBy("partial")} partial`, sub: `${formatKES(balanceBy("partial"))} due` },
+    { key: "paid", label: `${countBy("paid")} paid`, sub: `${formatKES(collectedTotal)} collected` },
+  ];
+
   return (
     <div>
-      <PageHeader
-        title="Invoices"
-        sub={monthLabel(month)}
-        actions={<Button onClick={handleGenerate} disabled={busy}>{busy ? "Generating…" : "Generate this month"}</Button>}
-      />
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setMonth(prev)}
+            aria-label="Previous month"
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-900"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5" aria-hidden="true">
+              <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 0 1-.02 1.06L8.06 11l4.71 4.71a.75.75 0 1 1-1.06 1.06l-5.24-5.24a.75.75 0 0 1 0-1.06l5.24-5.24a.75.75 0 0 1 1.06 0Z" clipRule="evenodd" />
+            </svg>
+          </button>
+          <h1 className="min-w-[13rem] text-center text-2xl font-bold text-slate-900">{monthLabel(month)}</h1>
+          <button
+            type="button"
+            onClick={() => setMonth(next)}
+            aria-label="Next month"
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-900"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5" aria-hidden="true">
+              <path fillRule="evenodd" d="M7.21 5.23a.75.75 0 0 1 1.06 0l5.24 5.24a.75.75 0 0 1 0 1.06l-5.24 5.24a.75.75 0 1 1-1.06-1.06L11.94 11 7.23 6.29a.75.75 0 0 1-.02-1.06Z" clipRule="evenodd" />
+            </svg>
+          </button>
+          {month !== currentMonthKey() && (
+            <button
+              type="button"
+              onClick={() => setMonth(currentMonthKey())}
+              className="ml-2 text-sm font-medium text-brand-600 hover:underline"
+            >
+              Back to current
+            </button>
+          )}
+        </div>
+        <Button onClick={handleGenerate} disabled={busy}>{busy ? "Generating…" : "Generate invoices"}</Button>
+      </div>
 
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <div className="flex gap-2">
-          <Button variant="secondary" size="sm" onClick={() => setMonth(prev)}>← {monthLabel(prev)}</Button>
-          <Button variant="secondary" size="sm" onClick={() => setMonth(currentMonthKey())}>This month</Button>
-          <Button variant="secondary" size="sm" onClick={() => setMonth(next)}>{monthLabel(next)} →</Button>
-        </div>
-        <div className="w-44">
-          <Field label="Status">
-            <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="all">All</option>
-              <option value="unpaid">Unpaid</option>
-              <option value="partial">Partial</option>
-              <option value="paid">Paid</option>
-            </Select>
-          </Field>
-        </div>
+      <div className="mb-5 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200 sm:grid-cols-4">
+        {filterCells.map((c) => (
+          <button
+            key={c.key}
+            type="button"
+            onClick={() => setStatus(c.key)}
+            aria-pressed={status === c.key}
+            className={`px-4 py-3 text-left transition-colors ${
+              status === c.key
+                ? "bg-slate-100 shadow-[inset_0_-2px_0_#0f172a]"
+                : "bg-white hover:bg-slate-50"
+            }`}
+          >
+            <span className={`block text-sm ${status === c.key ? "font-semibold text-slate-900" : "font-medium text-slate-700"}`}>
+              {c.label}
+            </span>
+            <span className="mt-0.5 block text-xs tabular-nums text-slate-500">{c.sub}</span>
+          </button>
+        ))}
       </div>
 
       {notice && (
@@ -111,19 +158,11 @@ export function InvoicesPage() {
       {shown.length === 0 ? (
         <EmptyState
           title={`No ${status === "all" ? "" : status + " "}invoices for ${monthLabel(month)}`}
-          hint="Generate this month's invoices from the occupied units, or pick another month."
+          hint="Generate one invoice per occupied unit, or step to another month with the arrows above."
           action={<Button onClick={handleGenerate} disabled={busy}>Generate invoices</Button>}
         />
       ) : (
         <Card>
-          <div className="flex flex-wrap gap-x-6 gap-y-1 border-b border-slate-200 px-4 py-3 text-sm text-slate-600">
-            <span>{shown.length} invoice{shown.length === 1 ? "" : "s"}</span>
-            <span>billed <Money value={shown.reduce((s, i) => s + i.total, 0)} className="font-semibold text-slate-900" /></span>
-            <span>
-              outstanding{" "}
-              <Money value={totalOutstanding} className={`font-semibold ${totalOutstanding > 0 ? "text-red-600" : "text-brand-600"}`} />
-            </span>
-          </div>
           <div className="overflow-x-auto">
             <table className="rtable w-full text-sm">
               <thead>
@@ -157,7 +196,7 @@ export function InvoicesPage() {
                         <InvoiceStatusBadge status={i.status} />
                         {i.balance > 0 && (
                           <>
-                            <button onClick={() => setCollecting(i)} className="text-xs font-medium text-brand-600 hover:underline">
+                            <button onClick={() => setCollecting(i)} className="text-xs font-semibold text-brand-600 hover:underline">
                               Collect
                             </button>
                             <button onClick={() => setPaying(i)} className="text-xs font-medium text-brand-600 hover:underline">
