@@ -388,34 +388,49 @@ export const stkInitiate = action({
       return { res, raw };
     };
 
-    let { res, raw } = await pushStk(token);
-    if (res.status === 401) {
-      // Daraja kills the previous token on every mint, so a cached token can
-      // be server-side dead while looking fresh. Mint once and retry.
-      token = await mintFreshDarajaToken(ctx, caller.orgId, creds);
-      ({ res, raw } = await pushStk(token));
-    }
-    console.log(`[stkInitiate] Daraja ${res.status} ${raw.slice(0, 300)}`);
-    let stk: Record<string, unknown> = {};
-    try {
-      stk = JSON.parse(raw) as Record<string, unknown>;
-    } catch {
-      // Failure path below reports the raw excerpt.
-    }
-    const strField = (...keys: string[]): string | undefined => {
+    const strFieldOf = (parsed: Record<string, unknown>, ...keys: string[]): string | undefined => {
       for (const k of keys) {
-        const v = stk[k];
+        const v = parsed[k];
         if (typeof v === "string" && v !== "") return v;
       }
       return undefined;
     };
-    const responseDescription = strField("ResponseDescription");
-    const checkoutRequestId = strField("CheckoutRequestID");
-    const merchantRequestId = strField("MerchantRequestID");
-    const errorCode = strField("errorCode", "ErrorCode");
-    const errorMessage = strField("errorMessage", "ErrorMessage");
 
-    if (!res.ok || strField("ResponseCode") !== "0" || !checkoutRequestId) {
+    const attemptPush = async (bearer: string) => {
+      const r = await pushStk(bearer);
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = JSON.parse(r.raw) as Record<string, unknown>;
+      } catch {
+        // Failure path reports the raw excerpt.
+      }
+      return { ...r, parsed };
+    };
+
+    // A dead token is reported two ways: HTTP 401, or a 200 envelope with
+    // errorCode 404.001.03 (Invalid Access Token). Daraja kills the previous
+    // token on every mint — QR loads, C2B callbacks and status polls all mint
+    // through the shared cache, so a cached token can be server-side dead
+    // while looking fresh. Mint once and retry on either signal.
+    const authDead = (a: { res: Response; raw: string; parsed: Record<string, unknown> }): boolean =>
+      a.res.status === 401 ||
+      strFieldOf(a.parsed, "errorCode", "ErrorCode") === "404.001.03" ||
+      /invalid access token/i.test(a.raw.slice(0, 500));
+
+    let attempt = await attemptPush(token);
+    if (authDead(attempt)) {
+      token = await mintFreshDarajaToken(ctx, caller.orgId, creds);
+      attempt = await attemptPush(token);
+    }
+    const { res, raw, parsed: stk } = attempt;
+    console.log(`[stkInitiate] Daraja ${res.status} ${raw.slice(0, 300)}`);
+    const responseDescription = strFieldOf(stk, "ResponseDescription");
+    const checkoutRequestId = strFieldOf(stk, "CheckoutRequestID");
+    const merchantRequestId = strFieldOf(stk, "MerchantRequestID");
+    const errorCode = strFieldOf(stk, "errorCode", "ErrorCode");
+    const errorMessage = strFieldOf(stk, "errorMessage", "ErrorMessage");
+
+    if (!res.ok || strFieldOf(stk, "ResponseCode") !== "0" || !checkoutRequestId) {
       if (/no apiproduct match/i.test(raw.slice(0, 500))) {
         throw new ConvexError(
           "STK Push: your Daraja app isn't subscribed to the Lipa na M-Pesa Online product — subscribe it to the app on developer.safaricom.co.ke, then retry.",
