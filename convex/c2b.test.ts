@@ -846,3 +846,116 @@ test("C2B confirmation for a voided payment stays in review", async () => {
   expect(res.status).toBe("pending_review");
   expect(res.deduplicated).toBe(false);
 });
+
+
+test("platform paybill routes by account code across orgs", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId: platformOrgId, asStaff } = await seedOrg(t);
+  // The platform org carries the shortcode with the platform flag.
+  await t.run(async (ctx) => {
+    await ctx.db.insert("mpesaCredentials", {
+      orgId: platformOrgId,
+      environment: "sandbox",
+      shortcode: SHORTCODE,
+      consumerKeyEnc: "test-key",
+      consumerSecretEnc: "test-secret",
+      passkeyEnc: "test-passkey",
+      platformPaybill: true,
+    });
+  });
+  // A different org's tenant owns the account code.
+  const orgB: Id<"orgs"> = await t.run(async (ctx) => ctx.db.insert("orgs", {
+    name: "Landlord B",
+    plan_code: "starter",
+    subscription_status: "active",
+    invoice_due_day: 5,
+  }));
+  const { tenantId, unitId } = await seedTenant(t, orgB);
+  await seedInvoice(t, orgB, tenantId, unitId);
+
+  const res = await confirm(t, { transId: "TRX-PLAT1", billRef: "KDI-TEST" });
+  expect(res.status).toBe("matched");
+
+  const pays = await t.run(async (ctx) => ctx.db.query("payments").collect());
+  expect(pays.length).toBe(1);
+  expect(pays[0].orgId).toBe(orgB);
+  // The platform owes the landlord until settled.
+  const ledger = await t.run(async (ctx) => ctx.db.query("platformCollections").collect());
+  expect(ledger.length).toBe(1);
+  expect(ledger[0].orgId).toBe(orgB);
+  expect(ledger[0].amount).toBe(20800);
+  // The c2b row lives with the money (org B), not the platform org.
+  const rows = await t.run(async (ctx) => ctx.db.query("c2bPayments").collect());
+  expect(rows.find((r) => r.transId === "TRX-PLAT1")?.orgId).toBe(orgB);
+});
+
+test("platform paybill parks unmatched payments in the platform org", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId: platformOrgId } = await seedOrg(t);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("mpesaCredentials", {
+      orgId: platformOrgId,
+      environment: "sandbox",
+      shortcode: SHORTCODE,
+      consumerKeyEnc: "test-key",
+      consumerSecretEnc: "test-secret",
+      passkeyEnc: "test-passkey",
+      platformPaybill: true,
+    });
+  });
+  const res = await confirm(t, {
+    transId: "TRX-PLAT2",
+    billRef: "NOPE",
+    msisdn: "254799999999",
+  });
+  expect(res.status).toBe("pending_review");
+  const rows = await t.run(async (ctx) => ctx.db.query("c2bPayments").collect());
+  expect(rows[0].orgId).toBe(platformOrgId);
+  const pays = await t.run(async (ctx) => ctx.db.query("payments").collect());
+  expect(pays.length).toBe(0);
+});
+
+test("platform STK twin links to the recorded payment, no second ledger write", async () => {
+  const t = convexTest(schema, modules);
+  const { orgId: platformOrgId } = await seedOrg(t);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("mpesaCredentials", {
+      orgId: platformOrgId,
+      environment: "sandbox",
+      shortcode: SHORTCODE,
+      consumerKeyEnc: "test-key",
+      consumerSecretEnc: "test-secret",
+      passkeyEnc: "test-passkey",
+      platformPaybill: true,
+    });
+  });
+  const orgB: Id<"orgs"> = await t.run(async (ctx) => ctx.db.insert("orgs", {
+    name: "Landlord B",
+    plan_code: "starter",
+    subscription_status: "active",
+    invoice_due_day: 5,
+  }));
+  const { tenantId, unitId } = await seedTenant(t, orgB);
+  await seedInvoice(t, orgB, tenantId, unitId);
+  // The STK callback recorded first (same receipt the C2B twin carries).
+  await t.run(async (ctx) => {
+    await ctx.db.insert("payments", {
+      orgId: orgB,
+      tenantId,
+      amount: 100,
+      method: "mpesa_stk",
+      mpesaCode: "TRX-TWIN1",
+      paidAt: Date.now(),
+      allocations: [],
+      receiptNo: "RCP-TWIN1",
+      status: "active" as const,
+    });
+  });
+  const res = await confirm(t, { transId: "TRX-TWIN1", billRef: "KDI-TEST" });
+  expect(res.status).toBe("matched");
+  expect(res.deduplicated).toBe(true);
+  const pays = await t.run(async (ctx) => ctx.db.query("payments").collect());
+  expect(pays.length).toBe(1);
+  const ledger = await t.run(async (ctx) => ctx.db.query("platformCollections").collect());
+  expect(ledger.length).toBe(0);
+});

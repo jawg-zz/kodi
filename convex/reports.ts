@@ -1082,3 +1082,63 @@ export const paymentTimeliness = query({
     };
   },
 });
+
+/**
+ * Platform-paybill settlement view: per-landlord totals collected into the
+ * platform paybill. Returns null unless the caller's org IS the platform
+ * paybill org, so ordinary orgs never see this section.
+ */
+export const platformCollectionSummary = query({
+  args: { orgId: v.id("orgs") },
+  returns: v.union(
+    v.object({
+      rows: v.array(
+        v.object({
+          orgId: v.id("orgs"),
+          orgName: v.string(),
+          unsettled: v.number(),
+          settled: v.number(),
+          count: v.number(),
+        }),
+      ),
+      totalUnsettled: v.number(),
+    }),
+    v.null(),
+  ),
+  handler: async (ctx, args) => {
+    await assertStaff(ctx, args.orgId);
+    const creds = await ctx.db
+      .query("mpesaCredentials")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .first();
+    if (creds === null || creds.platformPaybill !== true) return null;
+    const rows = await ctx.db
+      .query("platformCollections")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const totals = new Map<string, { unsettled: number; settled: number; count: number }>();
+    for (const r of rows) {
+      const t = totals.get(r.orgId) ?? { unsettled: 0, settled: 0, count: 0 };
+      t.count += 1;
+      if (r.settledAt === undefined) t.unsettled += r.amount;
+      else t.settled += r.amount;
+      totals.set(r.orgId, t);
+    }
+    const out = [];
+    for (const [orgId, t] of totals) {
+      const org = await ctx.db.get(orgId as Id<"orgs">);
+      out.push({
+        orgId: orgId as Id<"orgs">,
+        orgName: org?.name ?? "Unknown org",
+        unsettled: t.unsettled,
+        settled: t.settled,
+        count: t.count,
+      });
+    }
+    out.sort((a, b) => b.unsettled - a.unsettled);
+    return {
+      rows: out as never,
+      totalUnsettled: out.reduce((s, r) => s + r.unsettled, 0),
+    };
+  },
+});

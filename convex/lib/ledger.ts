@@ -145,6 +145,8 @@ export async function recordPaymentCore(
     checkoutRequestId?: string;
     targets?: Id<"invoices">[];
     useCredit?: boolean;
+    /** Money landed in the platform paybill — track it for landlord settlement. */
+    viaPlatform?: boolean;
   },
 ): Promise<{
   id: Id<"payments">;
@@ -266,6 +268,16 @@ export async function recordPaymentCore(
     checkoutRequestId: args.checkoutRequestId,
     leftoverCredit: remaining,
   });
+
+  // Platform-paybill collections are owed to the landlord until the
+  // platform operator settles them out — one ledger row per payment.
+  if (args.viaPlatform === true) {
+    await ctx.db.insert("platformCollections", {
+      orgId: args.orgId,
+      paymentId: id,
+      amount,
+    });
+  }
 
   // 3) Leftover becomes prepaid credit, with a ledger entry pointing back
   //    at this payment so staff can trace it later.

@@ -4,8 +4,8 @@ import { currentMonthKey, formatDate, formatKES, monthLabel } from "@kodi/shared
 import { useAuth } from "../lib/auth";
 import {
   generateInvoices,
+  getCollectionMode,
   getMonthCashSnapshot,
-  getMpesaCreds,
   listInvoices,
   listPayments,
   listTenants,
@@ -84,12 +84,17 @@ function CheckCircle({ done, n }: { done: boolean; n: number }) {
 }
 
 /** First-run screen: the three steps between signup and the first invoice. */
-function GettingStarted({ hasUnits, hasTenant, mpesaConfigured }: {
+function GettingStarted({ hasUnits, hasTenant, collection }: {
   hasUnits: boolean;
   hasTenant: boolean;
-  mpesaConfigured: boolean;
+  collection: { mode: "own" | "platform" | "none"; shortcode?: string };
 }) {
   const navigate = useNavigate();
+  const mpesaReady = collection.mode !== "none";
+  const mpesaDesc =
+    collection.mode === "platform"
+      ? `Tenants pay to Kodi Paybill ${collection.shortcode} with their own code — prompts and Paybill both record themselves.`
+      : "Tenants get an STK prompt or a Paybill QR, and payments record themselves.";
   const steps: { done: boolean; optional?: boolean; title: string; desc: string; cta: string; to: string }[] = [
     {
       done: hasUnits,
@@ -106,10 +111,10 @@ function GettingStarted({ hasUnits, hasTenant, mpesaConfigured }: {
       to: "/app/tenants",
     },
     {
-      done: mpesaConfigured,
-      optional: true,
-      title: "Connect M-Pesa",
-      desc: "Tenants get an STK prompt or a Paybill QR, and payments record themselves.",
+      done: mpesaReady,
+      optional: !mpesaReady,
+      title: mpesaReady ? "M-Pesa is ready" : "Connect M-Pesa",
+      desc: mpesaReady ? mpesaDesc : "Connect your own paybill, or collect through the Kodi Paybill once it's switched on.",
       cta: "Open settings",
       to: "/app/settings",
     },
@@ -159,7 +164,7 @@ export function DashboardPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [invoices, setInvoices] = useState<InvoiceWithRefs[]>([]);
   const [payments, setPayments] = useState<PaymentWithRefs[]>([]);
-  const [mpesa, setMpesa] = useState<{ configured: boolean } | null>(null);
+  const [collection, setCollection] = useState<{ mode: "own" | "platform" | "none"; shortcode?: string }>({ mode: "none" });
   const [cash, setCash] = useState<{ collected: number; expected: number; outstanding: number } | null>(null);
 
   const month = currentMonthKey();
@@ -175,13 +180,13 @@ export function DashboardPage() {
         listInvoices(org.id, month),
         listPayments(org.id),
         getMonthCashSnapshot(org.id, month).catch(() => null),
-        getMpesaCreds().catch(() => null),
+        getCollectionMode(org.id).catch(() => null),
       ]);
       setUnits(u);
       setTenants(t);
       setInvoices(inv);
       setPayments(pay.slice(0, 8));
-      setMpesa(mp);
+      if (mp !== null) setCollection(mp);
       setCash(snapshot);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -227,11 +232,7 @@ export function DashboardPage() {
           title={org?.name ?? "Welcome"}
           sub="Let's set up your rent collection — three quick steps."
         />
-        <GettingStarted
-          hasUnits={hasUnits}
-          hasTenant={hasTenant}
-          mpesaConfigured={!!mpesa?.configured}
-        />
+        <GettingStarted hasUnits={hasUnits} hasTenant={hasTenant} collection={collection} />
         <p className="mt-4 text-xs text-slate-400">
           You can change the business name, plan and M-Pesa details any time in Settings.
         </p>

@@ -58,6 +58,7 @@ export const insertTx = internalMutation({
     amount: v.number(),
     initiatedBy: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
+    viaPlatform: v.optional(v.boolean()),
   },
   returns: v.id("mpesaTransactions"),
   handler: async (ctx, args) => {
@@ -168,6 +169,7 @@ export const reconcileSuccessInternal = internalMutation({
       mpesaCode: args.mpesaReceipt,
       checkoutRequestId: args.checkoutRequestId,
       note: "M-Pesa STK Push",
+      viaPlatform: tx.viaPlatform === true,
     });
     // Mirror the Daraja-reported amount on the tx row so the STK list
     // matches the ledger even when it differs from the initiated amount.
@@ -380,3 +382,79 @@ export const storeCachedDarajaToken = internalMutation({
 
 export { txStatus, txShape };
 void ConvexError;
+
+
+/**
+ * Decrypted platform-paybill credentials (the org flagged platformPaybill).
+ * Orgs without their own Daraja credentials push STK through these.
+ */
+export const getPlatformCreds = internalMutation({
+  args: {},
+  returns: v.union(
+    v.object({
+      orgId: v.id("orgs"),
+      environment: v.union(v.literal("sandbox"), v.literal("production")),
+      consumerKey: v.string(),
+      consumerSecret: v.string(),
+      shortcode: v.string(),
+      passkey: v.string(),
+      registered: v.boolean(),
+    }),
+    v.null(),
+  ),
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("mpesaCredentials").collect();
+    const row = rows.find((r) => r.platformPaybill === true);
+    if (
+      row === undefined ||
+      !row.consumerKeyEnc ||
+      !row.consumerSecretEnc ||
+      !row.passkeyEnc
+    ) {
+      return null;
+    }
+    const [consumerKey, consumerSecret, passkey] = await Promise.all([
+      decryptSecret(row.consumerKeyEnc),
+      decryptSecret(row.consumerSecretEnc),
+      decryptSecret(row.passkeyEnc),
+    ]);
+    return {
+      orgId: row.orgId,
+      environment: row.environment,
+      consumerKey,
+      consumerSecret,
+      shortcode: row.shortcode,
+      passkey,
+      registered: row.c2bRegistered ?? false,
+    };
+  },
+});
+
+/** Platform flag toggle — internal (CLI/operator only), never client-facing. */
+export const setPlatformPaybill = internalMutation({
+  args: { orgId: v.id("orgs"), enabled: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("mpesaCredentials")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .first();
+    if (row === null) {
+      throw new ConvexError(
+        "Save Daraja credentials for this org before flagging it as the platform paybill",
+      );
+    }
+    await ctx.db.patch(row._id, { platformPaybill: args.enabled });
+    return null;
+  },
+});
+
+/** Brief tenant info for STK account references. */
+export const getTenantAccountCode = internalQuery({
+  args: { tenantId: v.id("tenants") },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, args) => {
+    const tenant = await ctx.db.get(args.tenantId);
+    return tenant?.accountCode ?? null;
+  },
+});

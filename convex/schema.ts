@@ -254,6 +254,8 @@ export default defineSchema({
     paymentId: v.optional(v.id("payments")),
     initiatedBy: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
+    /** Set when the push went through the platform paybill (settlement tracking). */
+    viaPlatform: v.optional(v.boolean()),
   })
     .index("by_checkout", ["checkoutRequestId"])
     .index("by_org", ["orgId"])
@@ -300,6 +302,12 @@ export default defineSchema({
     validationMode: v.optional(
       v.union(v.literal("accept_all"), v.literal("strict")),
     ),
+    /**
+     * Platform paybill: confirmations arriving on this shortcode route by
+     * tenant account code ACROSS all orgs (managed-paybill model). Only the
+     * platform operator's org carries this flag.
+     */
+    platformPaybill: v.optional(v.boolean()),
     /** Lipa na Bonga operator auth (separate SHA256 user/pass scheme). */
     bongaUsernameEnc: v.optional(v.string()),
     bongaPasswordEnc: v.optional(v.string()),
@@ -495,4 +503,19 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_token", ["token"]),
+
+  /**
+   * Money collected into the platform paybill on behalf of an org, awaiting
+   * settlement to the landlord. One row per recorded payment; settledAt is
+   * set when the platform operator pays the org out.
+   */
+  platformCollections: defineTable({
+    orgId: v.id("orgs"),
+    paymentId: v.id("payments"),
+    amount: v.number(),
+    settledAt: v.optional(v.number()),
+    payoutRef: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_payment", ["paymentId"]),
 });

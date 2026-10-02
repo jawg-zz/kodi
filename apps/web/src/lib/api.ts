@@ -1703,6 +1703,40 @@ export async function getMpesaCreds(): Promise<MpesaCredsView> {
   }
 }
 
+export type CollectionMode =
+  | { mode: "own"; shortcode: string }
+  | { mode: "platform"; shortcode: string }
+  | { mode: "none" };
+
+/** How this org collects: own Daraja credentials, the platform paybill, or nothing. */
+export async function getCollectionMode(orgId: string): Promise<CollectionMode> {
+  try {
+    return (await convex.query((api as any).c2b.getCollectionMode, {
+      orgId,
+    })) as CollectionMode;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+export type PlatformCollectionSummary = {
+  rows: { orgId: string; orgName: string; unsettled: number; settled: number; count: number }[];
+  totalUnsettled: number;
+} | null;
+
+/** Per-landlord totals collected into the platform paybill (platform org only). */
+export async function getPlatformCollectionSummary(
+  orgId: string,
+): Promise<PlatformCollectionSummary> {
+  try {
+    return (await convex.query((api as any).reports.platformCollectionSummary, {
+      orgId,
+    })) as PlatformCollectionSummary;
+  } catch (e) {
+    return err(e);
+  }
+}
+
 export async function saveMpesaCreds(values: {
   environment: "sandbox" | "production";
   consumerKey: string;

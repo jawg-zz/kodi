@@ -42,6 +42,7 @@ import type {
   PropertyCollectionRow,
   RentRoll,
 } from "../lib/types";
+import { getPlatformCollectionSummary, type PlatformCollectionSummary } from "../lib/api";
 import { Button } from "../components/Button";
 import { Field, Select } from "../components/Field";
 import { Badge, Card, CardBody, ErrorBanner, Loading, PageHeader, Stat } from "../components/ui";
@@ -81,6 +82,7 @@ const bucketTone: Record<string, "green" | "amber" | "red" | "blue"> = {
 export function ReportsPage() {
   const { org } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [platform, setPlatform] = useState<PlatformCollectionSummary>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [preset, setPreset] = useState<Preset>("6");
@@ -175,6 +177,11 @@ export function ReportsPage() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id, preset, startMonth, endMonth, propertyId]);
+
+  useEffect(() => {
+    if (!org) return;
+    getPlatformCollectionSummary(org.id).then(setPlatform).catch(() => setPlatform(null));
+  }, [org?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pre-filled WhatsApp reminder: the arrears list's whole job is turning
   // balances into conversations, and WhatsApp is where those happen.
@@ -845,6 +852,48 @@ export function ReportsPage() {
           </div>
         </CardBody>
       </Card>
+
+      {platform !== null && (
+        <Card className="mt-4">
+          <CardBody>
+            <h2 className="mb-1 font-semibold">Kodi Paybill collections</h2>
+            <p className="mb-3 text-sm text-slate-500">
+              Money collected into the platform paybill on behalf of each business, awaiting settlement.
+            </p>
+            {platform.rows.length === 0 ? (
+              <p className="text-sm text-slate-500">No platform-paybill collections yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="rtable w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+                      <th className="py-2 pr-3">Business</th>
+                      <th className="py-2 pr-3 text-right">Payments</th>
+                      <th className="py-2 pr-3 text-right">Unsettled</th>
+                      <th className="py-2 text-right">Settled</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {platform.rows.map((r) => (
+                      <tr key={r.orgId}>
+                        <td data-label="Business" className="py-2 pr-3 font-medium">{r.orgName}</td>
+                        <td data-label="Payments" className="py-2 pr-3 text-right">{r.count}</td>
+                        <td data-label="Unsettled" className="py-2 pr-3 text-right">
+                          <Money value={r.unsettled} className={r.unsettled > 0 ? "font-semibold text-red-600" : ""} />
+                        </td>
+                        <td data-label="Settled" className="py-2 text-right"><Money value={r.settled} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="mt-3 text-xs text-slate-400">
+              Total unsettled: {fmtKES(platform.totalUnsettled)}. Settle by paying the business directly, then record the payout from here (coming soon).
+            </p>
+          </CardBody>
+        </Card>
+      )}
     </div>
   );
 }

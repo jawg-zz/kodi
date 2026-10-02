@@ -6,7 +6,7 @@ import {
   query,
   type MutationCtx,
 } from "./_generated/server";
-import type { ActionCtx } from "./_generated/server";
+import type { ActionCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { sha256Hex } from "./lib/sha256";
 import type { Id } from "./_generated/dataModel";
@@ -200,21 +200,40 @@ type OrgRow = {
   _id: Id<"orgs">;
   shortcode: string;
   environment: "sandbox" | "production";
+  platformPaybill: boolean;
 };
 
 async function orgForShortcode(
   ctx: MutationCtx,
   shortcode: string,
 ): Promise<OrgRow | null> {
-  // Shortcodes are unique per org in practice; scan credentials (one row
-  // per org) rather than adding a shortcode index.
+  // One credentials row per org; scan rather than adding a shortcode index.
+  // When two orgs claim the same shortcode (a stray row plus the platform
+  // paybill), the platform-flagged row wins so routing stays deterministic.
   const rows = await ctx.db.query("mpesaCredentials").collect();
-  const hit = rows.find((r) => r.shortcode === shortcode);
-  if (hit === undefined) return null;
+  const hits = rows.filter((r) => r.shortcode === shortcode);
+  if (hits.length === 0) return null;
+  const hit = hits.find((r) => r.platformPaybill === true) ?? hits[0];
   return {
     _id: hit.orgId,
     shortcode: hit.shortcode,
     environment: hit.environment,
+    platformPaybill: hit.platformPaybill === true,
+  };
+}
+
+/** The org carrying the platform paybill flag, if any. */
+async function platformOrgFor(
+  ctx: MutationCtx | QueryCtx,
+): Promise<{ orgId: Id<"orgs">; shortcode: string; environment: "sandbox" | "production"; registered: boolean } | null> {
+  const rows = await ctx.db.query("mpesaCredentials").collect();
+  const hit = rows.find((r) => r.platformPaybill === true);
+  if (hit === undefined) return null;
+  return {
+    orgId: hit.orgId,
+    shortcode: hit.shortcode,
+    environment: hit.environment,
+    registered: hit.c2bRegistered ?? false,
   };
 }
 
@@ -326,10 +345,13 @@ async function anomalyScan(
  */
 async function matchTenant(
   ctx: MutationCtx,
-  orgId: Id<"orgs">,
+  orgId: Id<"orgs"> | null,
   billRef: string | undefined,
   msisdn: string,
 ): Promise<Match> {
+  // orgId === null is platform-paybill scope: the account code routes
+  // across every org (codes are minted globally unique), so a single
+  // unambiguous hit anywhere resolves the payer.
   const ref = (billRef ?? "").trim().toUpperCase();
   const digits = ref.replace(/\D/g, "");
   if (ref !== "") {
@@ -337,18 +359,20 @@ async function matchTenant(
       .query("tenants")
       .withIndex("by_account", (q) => q.eq("accountCode", ref))
       .first();
-    if (byCode !== null && byCode.orgId === orgId) {
+    if (byCode !== null && (orgId === null || byCode.orgId === orgId)) {
       return { tenantId: byCode._id, reason: `account code ${ref}` };
     }
     // National ID fallback: tenants type the ID they already know instead
-    // of the issued code. Scans the org's tenants (bounded per org) and
-    // requires a single unambiguous hit — duplicates fall through to the
-    // review queue rather than guessing.
+    // of the issued code. Requires a single unambiguous hit — duplicates
+    // fall through to the review queue rather than guessing.
     if (digits !== "" && digits.length >= 6) {
-      const tenants = await ctx.db
-        .query("tenants")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .collect();
+      const tenants =
+        orgId === null
+          ? await ctx.db.query("tenants").collect()
+          : await ctx.db
+              .query("tenants")
+              .withIndex("by_org", (q) => q.eq("orgId", orgId))
+              .collect();
       const hits = tenants.filter(
         (t) => t.national_id.replace(/\D/g, "") === digits,
       );
@@ -357,12 +381,15 @@ async function matchTenant(
       }
     }
   }
-  // Sender phone: v2 masks to 2547***126, so collect pattern fits and
-  // auto-match only a single unambiguous one.
-  const tenants = await ctx.db
-    .query("tenants")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .collect();
+  // Sender phone: masked or SHA-256 hash form — auto-match only a single
+  // unambiguous fit.
+  const tenants =
+    orgId === null
+      ? await ctx.db.query("tenants").collect()
+      : await ctx.db
+          .query("tenants")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect();
   const fits = tenants.filter(
     (t) => t.status !== "moved_out" && msisdnMatch(msisdn, t.phone) !== "none",
   );
@@ -772,6 +799,96 @@ export const recordC2bInternal = internalMutation({
     const org = await orgForShortcode(ctx, args.shortcode);
     if (org === null) {
       throw new ConvexError("Unknown business shortcode");
+    }
+    if (org.platformPaybill === true) {
+      // Managed-paybill model: the account code (or a lone sender-phone
+      // fit) routes across orgs; money records under the tenant's own org
+      // and a settlement row tracks what the platform owes the landlord.
+      // Unmatched hits park in the platform org's review queue.
+      const match = await matchTenant(ctx, null, args.billRef, args.msisdn);
+      if (match.tenantId === null) {
+        const id = await ctx.db.insert("c2bPayments", {
+          orgId: org._id,
+          transId,
+          transAmount: amount,
+          billRef: args.billRef?.trim() || undefined,
+          msisdn: args.msisdn,
+          firstName: args.firstName,
+          middleName: args.middleName,
+          lastName: args.lastName,
+          transTime: args.transTime,
+          status: "pending_review",
+          matchReason: match.reason,
+          rawPayload: args.rawPayload?.slice(0, 2000),
+        });
+        return { id, status: "pending_review" as const, deduplicated: false };
+      }
+      const tenant = await ctx.db.get(match.tenantId);
+      if (tenant === null) {
+        throw new ConvexError("Matched tenant not found");
+      }
+      const prior = await ctx.db
+        .query("payments")
+        .withIndex("by_org_code", (q) =>
+          q.eq("orgId", tenant.orgId).eq("mpesaCode", transId),
+        )
+        .first();
+      if (prior !== null && (prior.status ?? "active") === "active") {
+        const id = await ctx.db.insert("c2bPayments", {
+          orgId: tenant.orgId,
+          tenantId: prior.tenantId,
+          transId,
+          transAmount: amount,
+          billRef: args.billRef?.trim() || undefined,
+          msisdn: args.msisdn,
+          firstName: args.firstName,
+          middleName: args.middleName,
+          lastName: args.lastName,
+          transTime: args.transTime,
+          status: "matched",
+          matchReason: `duplicate notification for ${prior.receiptNo} — already recorded, no second entry`,
+          paymentId: prior._id,
+          rawPayload: args.rawPayload?.slice(0, 2000),
+        });
+        return {
+          id,
+          status: "matched" as const,
+          deduplicated: true,
+          paymentId: prior._id,
+        };
+      }
+      await anomalyScan(ctx, tenant.orgId, transId, amount, args.msisdn);
+      const res = await recordPaymentCore(ctx, {
+        orgId: tenant.orgId,
+        tenantId: tenant._id,
+        amount,
+        method: "mpesa_c2b",
+        mpesaCode: transId,
+        note: `Kodi Paybill ${args.shortcode}${args.billRef ? ` · ${args.billRef}` : ""}`,
+        viaPlatform: true,
+      });
+      const id = await ctx.db.insert("c2bPayments", {
+        orgId: tenant.orgId,
+        tenantId: tenant._id,
+        transId,
+        transAmount: amount,
+        billRef: args.billRef?.trim() || undefined,
+        msisdn: args.msisdn,
+        firstName: args.firstName,
+        middleName: args.middleName,
+        lastName: args.lastName,
+        transTime: args.transTime,
+        status: "matched",
+        matchReason: match.reason,
+        paymentId: res.id,
+        rawPayload: args.rawPayload?.slice(0, 2000),
+      });
+      return {
+        id,
+        status: "matched" as const,
+        deduplicated: false,
+        paymentId: res.id,
+      };
     }
     // Cross-channel duplicate: an STK push to a Paybill settles as a C2B
     // credit, so Daraja delivers BOTH the STK callback (already reconciled
@@ -1198,14 +1315,23 @@ export const getPaybillInfo = query({
       .query("mpesaCredentials")
       .withIndex("by_org", (q) => q.eq("orgId", tenant.orgId))
       .first();
-    if (creds === null || !creds.consumerKeyEnc) return null;
+    if (creds !== null && creds.consumerKeyEnc) {
+      return {
+        shortcode: creds.shortcode,
+        // Required at creation since the invariant landed; legacy rows fall
+        // back to "" and the staff backfill heals them. Never mint inside a
+        // query (queries cannot write).
+        accountCode: tenant.accountCode ?? "",
+        registered: creds.c2bRegistered ?? false,
+      };
+    }
+    // No own credentials: the org collects through the platform paybill.
+    const platform = await platformOrgFor(ctx);
+    if (platform === null) return null;
     return {
-      shortcode: creds.shortcode,
-      // Required at creation since the invariant landed; legacy rows fall
-      // back to "" and the staff backfill heals them. Never mint inside a
-      // query (queries cannot write).
+      shortcode: platform.shortcode,
       accountCode: tenant.accountCode ?? "",
-      registered: creds.c2bRegistered ?? false,
+      registered: platform.registered,
     };
   },
 });
@@ -1862,3 +1988,30 @@ export const simulateC2b = query({
 
 
 export { c2bShape, parseAmount };
+
+/**
+ * How this org collects money: its own Daraja credentials, the platform
+ * paybill (zero-credentials default), or nothing configured yet.
+ */
+export const getCollectionMode = query({
+  args: { orgId: v.id("orgs") },
+  returns: v.object({
+    mode: v.union(v.literal("own"), v.literal("platform"), v.literal("none")),
+    shortcode: v.optional(v.string()),
+  }),
+  handler: async (ctx, args) => {
+    await assertStaff(ctx, args.orgId);
+    const creds = await ctx.db
+      .query("mpesaCredentials")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .first();
+    if (creds !== null && creds.consumerKeyEnc) {
+      return { mode: "own" as const, shortcode: creds.shortcode };
+    }
+    const platform = await platformOrgFor(ctx);
+    if (platform !== null) {
+      return { mode: "platform" as const, shortcode: platform.shortcode };
+    }
+    return { mode: "none" as const };
+  },
+});

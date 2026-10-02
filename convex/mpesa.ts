@@ -340,14 +340,41 @@ export const stkInitiate = action({
         return { checkoutRequestId: dup.checkoutRequestId, deduplicated: true };
       }
     }
-    const creds = await ctx.runMutation(
+    let creds = await ctx.runMutation(
       internal.mpesaInternal.getDecryptedCreds,
       { orgId: caller.orgId },
     );
+    let viaPlatform = false;
     if (creds === null) {
-      throw new ConvexError(
-        "M-Pesa is not configured for this business. Add Daraja credentials in Settings.",
+      // Zero-friction default: orgs without their own Daraja credentials
+      // push through the platform paybill; money routes back by account code.
+      const platform = await ctx.runMutation(
+        internal.mpesaInternal.getPlatformCreds,
+        {},
       );
+      if (platform === null) {
+        throw new ConvexError(
+          "M-Pesa is not configured for this business. Add Daraja credentials in Settings.",
+        );
+      }
+      creds = {
+        environment: platform.environment,
+        consumerKey: platform.consumerKey,
+        consumerSecret: platform.consumerSecret,
+        shortcode: platform.shortcode,
+        passkey: platform.passkey,
+      };
+      viaPlatform = true;
+    }
+    let accountRef = args.tenantId.slice(0, 12);
+    if (viaPlatform) {
+      // The C2B twin of this push lands on the platform paybill, where
+      // routing keys on the tenant's account code — send that, not an id.
+      const code = await ctx.runQuery(
+        internal.mpesaInternal.getTenantAccountCode,
+        { tenantId: args.tenantId },
+      );
+      if (code !== null && code !== "") accountRef = code;
     }
     const siteBase = siteBaseUrl(process.env);
     if (!siteBase) {
@@ -378,7 +405,7 @@ export const stkInitiate = action({
           PartyB: creds.shortcode,
           PhoneNumber: phone,
           CallBackURL: callbackUrl,
-          AccountReference: args.tenantId.slice(0, 12),
+          AccountReference: accountRef,
           TransactionDesc: "Rent payment",
         }),
       });
@@ -448,6 +475,7 @@ export const stkInitiate = action({
       amount,
       initiatedBy: caller.userId,
       idempotencyKey: idem,
+      viaPlatform,
     });
     return { checkoutRequestId };
   },

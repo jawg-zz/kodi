@@ -12,6 +12,7 @@ import {
   exportOrgBackup,
   generateInvoices,
   getBillManagerState,
+  getCollectionMode,
   getC2bStatus,
   getInitiatorStatus,
   getMpesaCreds,
@@ -311,7 +312,9 @@ function StaffSection({ staff, isOwner }: { staff: { user_id: string; role: stri
 
 // ---------------------------------------------------------------------------
 function DarajaSection() {
+  const { org } = useAuth();
   const [creds, setCreds] = useState<MpesaCredsView | null>(null);
+  const [collection, setCollection] = useState<{ mode: "own" | "platform" | "none"; shortcode?: string }>({ mode: "none" });
   const [loading, setLoading] = useState(true);
   const [env, setEnv] = useState<"sandbox" | "production">("sandbox");
   const [consumerKey, setConsumerKey] = useState("");
@@ -334,7 +337,16 @@ function DarajaSection() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!org) return;
+    getCollectionMode(org.id)
+      .then(setCollection)
+      .catch(() => {});
+  }, [org?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -371,6 +383,13 @@ function DarajaSection() {
         {!loading && error && error.includes("Could not reach") && (
           <div className="mb-3">
             <Button variant="secondary" onClick={load}>Retry connection</Button>
+          </div>
+        )}
+        {!loading && collection.mode === "platform" && !creds?.configured && (
+          <div className="print-ink mb-3 rounded-lg border border-brand-100 bg-brand-50 p-3 text-sm text-brand-700">
+            This business collects through the <strong>Kodi Paybill ({collection.shortcode})</strong> —
+            tenants pay with their own account code and payments record themselves. No setup needed.
+            Save your own Daraja credentials below to switch to your own paybill instead.
           </div>
         )}
         <form onSubmit={save} className="grid max-w-lg gap-3">
