@@ -65,3 +65,16 @@ export const findPendingByIdem = internalQuery({
     return { checkoutRequestId: tx.checkoutRequestId };
   },
 });
+
+export const getOrgStatus = internalQuery({
+  args: { orgId: v.id("orgs") },
+  returns: v.union(
+    v.object({ subscription_status: v.string() }),
+    v.null(),
+  ),
+  handler: async (ctx, args) => {
+    const org = await ctx.db.get(args.orgId);
+    if (org === null) return null;
+    return { subscription_status: org.subscription_status };
+  },
+});

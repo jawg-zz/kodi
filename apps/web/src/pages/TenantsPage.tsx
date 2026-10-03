@@ -334,6 +334,7 @@ export function TenantModal({ orgId, tenant, units, onClose, onSaved }: {
 export function InviteTenantButton({ tenant }: { tenant: Tenant }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [resultEmail, setResultEmail] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -352,8 +353,9 @@ export function InviteTenantButton({ tenant }: { tenant: Tenant }) {
         tenantId: tenant.id,
       });
       setResult(
-        `Portal invite created for ${r.email}. Share this link: ${window.location.origin}/invite/${r.inviteToken} — it expires in 7 days.`,
+        `${window.location.origin}/invite/${r.inviteToken}`,
       );
+      setResultEmail(r.email);
       setShowForm(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -366,10 +368,33 @@ export function InviteTenantButton({ tenant }: { tenant: Tenant }) {
     return <Button size="sm" variant="secondary" onClick={() => setShowForm(true)}>Invite to portal</Button>;
   }
 
+  const waText = result
+    ? `Hi ${tenant.full_name}, view your rent and pay by M-Pesa here: ${result} (expires in 7 days)`
+    : "";
+  const waHref = `https://wa.me/${tenant.phone.replace(/\D/g, "")}?text=${encodeURIComponent(waText)}`;
+
   return (
     <div className="rounded-lg border border-slate-200 p-3">
       {result ? (
-        <p className="text-sm font-medium text-brand-700">{result}</p>
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-brand-700">
+            Portal invite created{resultEmail ? ` for ${resultEmail}` : ""}.
+          </p>
+          <p className="break-all font-mono text-xs text-slate-600">{result}</p>
+          <div className="flex flex-wrap gap-2">
+            <a
+              href={waHref}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700"
+            >
+              Share on WhatsApp
+            </a>
+            <Button size="sm" variant="secondary" onClick={() => { void navigator.clipboard?.writeText(result ?? ""); }}>
+              Copy link
+            </Button>
+          </div>
+        </div>
       ) : (
         <div className="space-y-2">
           <Field label="Tenant email">

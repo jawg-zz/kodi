@@ -191,6 +191,11 @@ export const generateInvoices = mutation({
     }
     const org = await ctx.db.get(args.orgId);
     if (org === null) throw new ConvexError("Organization not found");
+    if (org.subscription_status === "suspended") {
+      throw new ConvexError(
+        "This business is suspended — contact Kodi support to reactivate billing.",
+      );
+    }
     const dueDate = dueDateFor(args.month, org.invoice_due_day);
 
     const units = await ctx.db

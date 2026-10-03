@@ -12,6 +12,7 @@ import { InvoicesPage } from "./pages/InvoicesPage";
 import { PaymentsPage, ReceiptPage } from "./pages/PaymentsPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { OperatorPage } from "./pages/OperatorPage";
 import { PortalPage } from "./pages/PortalPage";
 import { InvitePage } from "./pages/InvitePage";
 import { InvoiceDocPage, ReceiptDocPage, RentBookDocPage, SettlementDocPage, StatementDocPage } from "./pages/PrintPages";
@@ -84,6 +85,7 @@ export default function App() {
 
           <Route element={<RequireOrgOrPortal />}>
             <Route element={<RequireStaff />}>
+              <Route path="/operator" element={<OperatorPage />} />
               <Route path="/app" element={<AppLayout />}>
                 <Route index element={<DashboardPage />} />
                 <Route path="properties" element={<PropertiesPage />} />

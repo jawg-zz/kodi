@@ -11,6 +11,7 @@ const orgShape = v.object({
     v.literal("trialing"),
     v.literal("active"),
     v.literal("past_due"),
+    v.literal("suspended"),
   ),
   subscription_period_end: v.optional(v.string()),
   invoice_due_day: v.number(),
@@ -19,9 +20,11 @@ const orgShape = v.object({
 
 const PLANS = ["starter", "growth", "pro"] as const;
 
-/** Current caller's org + membership + tenant link (drives routing). */
+/** Current caller's org + membership + tenant link (drives routing).
+ * Pass orgId to pin multi-org staff to one org (the switcher); the id must
+ * belong to the caller. Tenants resolve through their own link. */
 export const myOrg = query({
-  args: {},
+  args: { orgId: v.optional(v.id("orgs")) },
   returns: v.union(
     v.object({
       org: orgShape,
@@ -58,7 +61,7 @@ export const myOrg = query({
     }),
     v.null(),
   ),
-  handler: async (ctx) => {
+  handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
     if (identity === null) return null;
     const userId = identity.subject;
@@ -70,10 +73,18 @@ export const myOrg = query({
       profileRow === null
         ? null
         : { full_name: profileRow.full_name, phone: profileRow.phone };
-    const membership = await ctx.db
+    const memberships = await ctx.db
       .query("orgMembers")
       .withIndex("by_user", (q) => q.eq("userId", userId))
-      .first();
+      .collect();
+    let membership = memberships[0] ?? null;
+    if (args.orgId !== undefined) {
+      const pinned = memberships.find(
+        (m) => m.orgId.toString() === (args.orgId as string).toString(),
+      );
+      if (pinned === undefined) throw new ConvexError("Not a member of this organization");
+      membership = pinned;
+    }
     if (membership !== null) {
       const org = await ctx.db.get(membership.orgId);
       if (org === null) return null;
@@ -89,6 +100,34 @@ export const myOrg = query({
     const org = await ctx.db.get(tenant.orgId);
     if (org === null) return null;
     return { org, role: "tenant" as const, profile, tenant };
+  },
+});
+
+/** All orgs the caller belongs to — drives the org switcher. */
+export const myOrgs = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      orgId: v.id("orgs"),
+      name: v.string(),
+      role: v.union(v.literal("owner"), v.literal("manager")),
+    }),
+  ),
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) return [];
+    const memberships = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .collect();
+    const out: { orgId: (typeof memberships)[number]["orgId"]; name: string; role: "owner" | "manager" }[] = [];
+    for (const m of memberships) {
+      const org = await ctx.db.get(m.orgId);
+      if (org === null) continue;
+      out.push({ orgId: m.orgId, name: org.name, role: m.role });
+    }
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
   },
 });
 
@@ -171,6 +210,7 @@ export const updateOrg = mutation({
         v.literal("trialing"),
         v.literal("active"),
         v.literal("past_due"),
+        v.literal("suspended"),
       ),
     ),
   },
@@ -253,5 +293,55 @@ export const listStaff = query({
       });
     }
     return out;
+  },
+});
+
+/**
+ * Owner-only: how this landlord wants managed-paybill money forwarded —
+ * their own paybill, till, Pochi wallet, or B2C to a personal number.
+ * Targets are digit-sanitized (paybill/till: 5–12 digits, b2c/pochi:
+ * 254XXXXXXXXXX) so the forwarder never re-interprets UI strings.
+ */
+export const setPayoutPreference = mutation({
+  args: {
+    orgId: v.id("orgs"),
+    method: v.union(
+      v.literal("paybill"),
+      v.literal("till"),
+      v.literal("pochi"),
+      v.literal("b2c"),
+    ),
+    target: v.string(),
+    autoForward: v.optional(v.boolean()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const caller = await assertStaff(ctx, args.orgId);
+    if (caller.role !== "owner") {
+      throw new ConvexError("Only the business owner can change payout settings.");
+    }
+    const digits = args.target.replace(/\D/g, "");
+    if (args.method === "paybill" || args.method === "till") {
+      if (!/^\d{5,12}$/.test(digits)) {
+        throw new ConvexError("Paybill/till must be 5–12 digits.");
+      }
+    } else {
+      if (digits.length !== 12 || !digits.startsWith("254")) {
+        throw new ConvexError("Pochi/B2C needs a 254XXXXXXXXXX number.");
+      }
+    }
+    await ctx.db.patch(args.orgId, {
+      payoutMethod: args.method,
+      payoutTarget: digits,
+      ...(args.autoForward === undefined ? {} : { autoForward: args.autoForward }),
+    });
+    await audit(ctx, {
+      orgId: args.orgId,
+      actorUserId: caller.userId,
+      action: "org.payout",
+      entityType: "org",
+      entityId: args.orgId,
+    });
+    return null;
   },
 });

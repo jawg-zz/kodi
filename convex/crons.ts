@@ -11,4 +11,16 @@ crons.interval(
   {},
 );
 
+/**
+ * Nightly auto-forward sweep: settled-after-hold platform collections go
+ * to each landlord's registered rail, net of the platform fee. Idempotent
+ * per row (settledAt claim) and failure-tolerant (alert + retry tomorrow).
+ */
+crons.daily(
+  "auto-forward platform collections",
+  { hourUTC: 1, minuteUTC: 0 },
+  internal.forwarder.sweepForward,
+  {},
+);
+
 export default crons;

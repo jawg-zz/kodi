@@ -41,6 +41,10 @@ interface AuthState {
   ) => Promise<{ error: string | null; needsConfirmation: boolean }>;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
+  /** All orgs the caller belongs to (staff) — drives the org switcher. */
+  myOrgs: { orgId: string; name: string; role: string }[];
+  /** Pin the active org (multi-org staff). Persists in localStorage. */
+  setActiveOrgId: (id: string | null) => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -82,7 +86,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const isAuthenticated = oidcUser !== null;
-  const myOrg = useQuery(api.orgs.myOrg, isAuthenticated ? {} : "skip");
+  // Multi-org staff pin one org via the switcher (localStorage); tenants
+  // always resolve through their own link (no orgId passed).
+  const [activeOrgId, setActiveOrgIdState] = useState<string | null>(() => {
+    try {
+      return window.localStorage.getItem("kodi.activeOrg") ?? null;
+    } catch {
+      return null;
+    }
+  });
+  const setActiveOrgId = useCallback((id: string | null) => {
+    setActiveOrgIdState(id);
+    try {
+      if (id === null) window.localStorage.removeItem("kodi.activeOrg");
+      else window.localStorage.setItem("kodi.activeOrg", id);
+    } catch {
+      // storage unavailable — selection lasts for this session only
+    }
+  }, []);
+  const myOrg = useQuery(
+    api.orgs.myOrg,
+    isAuthenticated
+      ? activeOrgId
+        ? { orgId: activeOrgId as never }
+        : {}
+      : "skip",
+  );
+  const myOrgs = useQuery(
+    api.orgs.myOrgs,
+    isAuthenticated ? {} : "skip",
+  );
 
   const signIn = useCallback(async () => {
     // Clear any stale local session first: a logged-out Logto SSO cookie
@@ -188,6 +221,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signUp,
         signOut,
         refresh,
+        myOrgs: (myOrgs ?? []).map((o) => ({
+          orgId: o.orgId as string,
+          name: o.name,
+          role: o.role,
+        })),
+        setActiveOrgId,
       }}
     >
       {children}

@@ -15,7 +15,7 @@
     "typecheck": "npm run typecheck -w apps/web",
     "typecheck:docs": "npm run typecheck -w apps/docs",
     "test": "npm run test -w packages/shared && npx vitest run convex/reports.test.ts convex/payments.test.ts convex/c2b.test.ts convex/demo.test.ts convex/daraja.test.ts convex/initiator.test.ts convex/extended.test.ts --root .",
-    "test:convex": "npx vitest run convex/reports.test.ts convex/payments.test.ts convex/c2b.test.ts convex/demo.test.ts convex/daraja.test.ts convex/initiator.test.ts convex/extended.test.ts --root ."
+    "test:convex": "npx vitest run convex/reports.test.ts convex/payments.test.ts convex/c2b.test.ts convex/demo.test.ts convex/daraja.test.ts convex/initiator.test.ts convex/extended.test.ts convex/operator.test.ts convex/forwarder.test.ts --root ."
   },
   "devDependencies": {
     "convex": "^1.46.0",

@@ -224,10 +224,12 @@ export function DashboardPage() {
   const hasUnits = units.length > 0;
   const hasTenant = tenants.length > 0;
   const setupDone = hasUnits && hasTenant;
+  const suspended = org?.subscription_status === "suspended";
 
   if (!setupDone) {
     return (
       <div>
+        {suspended && <SuspendedBanner />}
         <PageHeader
           title={org?.name ?? "Welcome"}
           sub="Let's set up your rent collection — three quick steps."
@@ -240,11 +242,24 @@ export function DashboardPage() {
     );
   }
 
+function SuspendedBanner() {
+  return (
+    <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+      <p className="font-semibold">This business is suspended.</p>
+      <p className="mt-1">
+        New invoices and M-Pesa collection are paused — your data is safe and exportable.
+        Contact Kodi support to reactivate billing.
+      </p>
+    </div>
+  );
+}
+
   // Set up but nothing billed yet: one clear action instead of a 0% report.
   if (invoices.length === 0) {
     const occupied = units.filter((u) => u.status !== "vacant").length;
     return (
       <div>
+        {suspended && <SuspendedBanner />}
         <PageHeader title={monthLabel(month)} sub="Everything is set up" />
         <Card>
           <CardBody>
@@ -277,6 +292,7 @@ export function DashboardPage() {
 
   return (
     <div>
+      {suspended && <SuspendedBanner />}
       <PageHeader
         title={monthLabel(month)}
         sub={`${invoices.length} invoice${invoices.length === 1 ? "" : "s"} this month`}

@@ -330,6 +330,15 @@ export const stkInitiate = action({
     if (tenant === null || tenant.orgId !== caller.orgId) {
       throw new ConvexError("Tenant not found in your organization");
     }
+    const orgRow: { subscription_status?: string } | null = await ctx.runQuery(
+      internal.helpers.getOrgStatus,
+      { orgId: caller.orgId },
+    );
+    if (orgRow?.subscription_status === "suspended") {
+      throw new ConvexError(
+        "This business is suspended — contact Kodi support to reactivate billing.",
+      );
+    }
     const idem = (args.idempotencyKey ?? "").slice(0, 128) || undefined;
     if (idem) {
       const dup: { checkoutRequestId: string } | null = await ctx.runQuery(

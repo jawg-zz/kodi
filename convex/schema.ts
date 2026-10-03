@@ -31,7 +31,25 @@ export default defineSchema({
       v.literal("trialing"),
       v.literal("active"),
       v.literal("past_due"),
+      v.literal("suspended"),
     ),
+    /**
+     * Landlord payout preference for managed-paybill settlements: receive
+     * via their own paybill, till (Buy Goods), Pochi wallet, or B2C to a
+     * personal number. validatedDigits keeps the sanitized target so the
+     * forwarder never re-interprets UI strings.
+     */
+    payoutMethod: v.optional(
+      v.union(
+        v.literal("paybill"),
+        v.literal("till"),
+        v.literal("pochi"),
+        v.literal("b2c"),
+      ),
+    ),
+    payoutTarget: v.optional(v.string()),
+    /** Auto-forward settled batches to the landlord (default on). */
+    autoForward: v.optional(v.boolean()),
     subscription_period_end: v.optional(v.string()),
     invoice_due_day: v.number(),
     /**
@@ -513,9 +531,39 @@ export default defineSchema({
     orgId: v.id("orgs"),
     paymentId: v.id("payments"),
     amount: v.number(),
+    /** Platform fee (KES) taken from this collection; 0 when fee model is unset. */
+    fee: v.optional(v.number()),
     settledAt: v.optional(v.number()),
     payoutRef: v.optional(v.string()),
+    /** "manual" (operator-clicked) or "auto" (forwarder sweep). */
+    settleKind: v.optional(v.union(v.literal("manual"), v.literal("auto"))),
   })
     .index("by_org", ["orgId"])
     .index("by_payment", ["paymentId"]),
+
+  /**
+   * Platform operators: SaaS admins, decoupled from any org membership.
+   * userId is the OIDC subject (identity.subject). Only members handle the
+   * operator console, settlement actions, and plan/status changes.
+   */
+  platformAdmins: defineTable({
+    userId: v.string(),
+    createdAt: v.number(),
+  }).index("by_user", ["userId"]),
+
+  /**
+   * Platform-wide settings (single doc, key = "global"): fee model for
+   * managed-paybill collections, forward cadence and clawback window.
+   */
+  platformSettings: defineTable({
+    key: v.string(),
+    /** Fee percent of platform-collected rent (e.g. 1.5). */
+    feePct: v.number(),
+    /** Monthly fee cap per org in KES. */
+    feeCapKes: v.number(),
+    /** Sweep: forward collections older than this many hours. */
+    forwardHoldHours: v.number(),
+    /** Don't forward below this KES (accumulate instead). */
+    forwardMinKes: v.number(),
+  }).index("by_key", ["key"]),
 });

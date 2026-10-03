@@ -1,5 +1,5 @@
 export type PlanCode = "starter" | "growth" | "pro";
-export type SubscriptionStatus = "trialing" | "active" | "past_due";
+export type SubscriptionStatus = "trialing" | "active" | "past_due" | "suspended";
 export type OrgRole = "owner" | "manager";
 
 export type PropertyType =

@@ -374,5 +374,24 @@ export async function reversePaymentInTx(
     reversedBy,
     reverseReason: reason,
   });
+  // Money already forwarded to the landlord can't be clawed back
+  // automatically — net it as a negative adjustment row so the next sweep
+  // deducts it from what that org is owed. Only a landlord with no further
+  // collections and a negative balance needs manual intervention.
+  const fwd = await ctx.db
+    .query("platformCollections")
+    .withIndex("by_payment", (q) => q.eq("paymentId", paymentId))
+    .first();
+  if (fwd !== undefined && fwd !== null && fwd.settledAt !== undefined) {
+    const feeBack = fwd.fee ?? 0;
+    await ctx.db.insert("platformCollections", {
+      orgId: payment.orgId,
+      paymentId,
+      amount: -(payment.amount - feeBack),
+      fee: -feeBack,
+      payoutRef: `adjustment: ${reversedStatus} ${payment.receiptNo}`,
+      settleKind: "manual",
+    });
+  }
   return { creditShortfall };
 }

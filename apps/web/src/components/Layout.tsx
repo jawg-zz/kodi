@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { Button } from "./Button";
+import { convex } from "../lib/convex";
+import { api } from "../../../../convex/_generated/api";
 
 const links = [
   { to: "/app", end: true, label: "Dashboard" },
@@ -13,15 +15,54 @@ const links = [
   { to: "/app/settings", label: "Settings" },
 ];
 
+function useIsOperator() {
+  const [isOp, setIsOp] = useState(false);
+  useEffect(() => {
+    convex
+      .query((api as any).operator.amPlatformAdmin, {})
+      .then((v) => setIsOp(v as boolean))
+      .catch(() => setIsOp(false));
+  }, []);
+  return isOp;
+}
+
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   `block rounded-lg px-3 py-2 text-sm font-medium transition ${
     isActive ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"
   }`;
 
+/** Multi-org staff: switch between businesses (property managers). */
+function OrgSwitcher({ compact = false }: { compact?: boolean }) {
+  const { org, myOrgs, setActiveOrgId } = useAuth();
+  if (myOrgs.length < 2 || !org) return null;
+  return (
+    <select
+      aria-label="Switch business"
+      value={org.id}
+      onChange={(e) => {
+        setActiveOrgId(e.target.value);
+        window.location.assign("/app");
+      }}
+      className={
+        compact
+          ? "w-full rounded-lg bg-slate-800 px-2 py-1.5 text-xs text-slate-200"
+          : "mt-1 w-full rounded-lg bg-slate-800 px-2 py-1.5 text-xs text-slate-200"
+      }
+    >
+      {myOrgs.map((o) => (
+        <option key={o.orgId} value={o.orgId}>
+          {o.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export function AppLayout() {
   const { org, membership, signOut, profile } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const isOperator = useIsOperator();
 
   const handleSignOut = async () => {
     await signOut();
@@ -35,6 +76,7 @@ export function AppLayout() {
         <div className="border-b border-slate-700 px-5 py-5">
           <p className="text-xl font-bold text-white">Kodi</p>
           <p className="mt-0.5 truncate text-xs text-slate-400">{org?.name ?? "Rent Manager"}</p>
+          <OrgSwitcher />
         </div>
         <nav className="flex-1 space-y-1 p-3">
           {links.map((l) => (
@@ -42,6 +84,11 @@ export function AppLayout() {
               {l.label}
             </NavLink>
           ))}
+          {isOperator && (
+            <NavLink to="/operator" className={navLinkClass}>
+              Operator
+            </NavLink>
+          )}
         </nav>
         <div className="border-t border-slate-700 p-4 text-xs">
           <p className="truncate text-slate-300">{profile?.full_name || "Account"}</p>
@@ -58,6 +105,7 @@ export function AppLayout() {
           <div className="min-w-0">
             <p className="text-lg font-bold leading-tight text-white">Kodi</p>
             <p className="truncate text-xs text-slate-400">{org?.name ?? "Rent Manager"}</p>
+            <OrgSwitcher compact />
           </div>
           <button
             onClick={() => setMenuOpen((o) => !o)}
@@ -81,6 +129,11 @@ export function AppLayout() {
                 {l.label}
               </NavLink>
             ))}
+            {isOperator && (
+              <NavLink to="/operator" className={navLinkClass} onClick={() => setMenuOpen(false)}>
+                Operator
+              </NavLink>
+            )}
             <div className="border-t border-slate-700 pt-3 text-xs text-slate-400">
               <p className="px-3 truncate">{profile?.full_name || "Account"}</p>
               <p className="px-3 mt-0.5">{membership?.role}</p>
