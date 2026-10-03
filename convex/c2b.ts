@@ -10,7 +10,7 @@ import type { ActionCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { sha256Hex } from "./lib/sha256";
 import type { Id } from "./_generated/dataModel";
-import { assertOrgMember, assertOwner, assertStaff, audit, normalizePhone, siteBaseUrl } from "./lib/auth";
+import { assertOrgMember, assertOwner, assertStaff, audit, siteBaseUrl } from "./lib/auth";
 import { cachedDarajaToken, darajaBase, isDarajaAuthDead, mintFreshDarajaToken } from "./lib/daraja";
 import { recordPaymentCore, reversePaymentInTx } from "./lib/ledger";
 
@@ -44,34 +44,20 @@ const c2bShape = v.object({
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
 /**
- * Human-meaningful account code: property + unit initials, e.g. "GC-A1".
- * Falls back to the random KDI- scheme when the tenant has no unit or the
- * smart code is taken. Readable codes cut M-Pesa-menu typos; the random
- * fallback keeps uniqueness without staff intervention.
+ * Paybill account code, the ONLY key that auto-matches a payment to a
+ * tenant: "KD" + 4 chars from the confusion-free alphabet (no 0/O/1/I/L).
+ * Fixed 6-char length, no hyphens — hyphen is the most-dropped character
+ * on phone keypads. ~1.3M combinations; uniqueness via the by_account
+ * index loop below.
  */
-function smartAccountCode(
-  propertyName: string | undefined,
-  unitLabel: string | undefined,
-): string | null {
-  const initials = (propertyName ?? "")
-    .split(/[^A-Za-z0-9]+/)
-    .filter(Boolean)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 3);
-  const unit = (unitLabel ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 6);
-  if (initials === "" || unit === "") return null;
-  return `${initials}-${unit}`;
-}
+export const ACCOUNT_CODE_RE = /^KD[A-Z2-9]{4}$/;
 
-/** Stable per-tenant Paybill account code, e.g. "GC-A1" then "KDI-7Q2X". */
 function mintAccountCode(): string {
   let suffix = "";
   for (let i = 0; i < 4; i += 1) {
     suffix += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
   }
-  return `KDI-${suffix}`;
+  return `KD${suffix}`;
 }
 
 async function codeTaken(ctx: MutationCtx, code: string): Promise<boolean> {
@@ -82,24 +68,17 @@ async function codeTaken(ctx: MutationCtx, code: string): Promise<boolean> {
   return clash !== null;
 }
 
-async function uniqueAccountCode(
-  ctx: MutationCtx,
-  preferred: string | null,
-): Promise<string> {
-  if (preferred !== null && !(await codeTaken(ctx, preferred))) {
-    return preferred;
-  }
-  if (preferred !== null) {
-    for (let i = 2; i <= 9; i += 1) {
-      const suffixed = `${preferred}-${i}`;
-      if (!(await codeTaken(ctx, suffixed))) return suffixed;
-    }
-  }
-  for (let i = 0; i < 8; i += 1) {
+async function uniqueAccountCode(ctx: MutationCtx): Promise<string> {
+  for (let i = 0; i < 16; i += 1) {
     const code = mintAccountCode();
     if (!(await codeTaken(ctx, code))) return code;
   }
-  return `KDI-${Date.now().toString(36).toUpperCase().slice(-4)}`;
+  // Astronomically unlikely (16 straight collisions in a ~1.3M space);
+  // timestamp suffix keeps the invariant without staff intervention.
+  for (;;) {
+    const code = `KD${Date.now().toString(36).toUpperCase().replace(/[^A-Z2-9]/g, "X").slice(-4).padStart(4, "X")}`;
+    if (!(await codeTaken(ctx, code))) return code;
+  }
 }
 
 /** Ensure the tenant has an account code (legacy backfill path only). */
@@ -109,34 +88,26 @@ export async function ensureAccountCode(
 ): Promise<string> {
   const tenant = await ctx.db.get(tenantId);
   if (tenant === null) throw new ConvexError("Tenant not found");
-  if (tenant.accountCode) return tenant.accountCode;
+  // Full migration: every call re-issues a KDXXXX code, replacing legacy
+  // smart/KDI-hyphen formats. Idempotent per-tenant only in the sense that
+  // callers check ACCOUNT_CODE_RE first (see backfillAccountCodes).
   const code = await mintAccountCodeFor(ctx, tenant.orgId, tenant.unitId);
   await ctx.db.patch(tenantId, { accountCode: code });
   return code;
 }
 
 /**
- * Mint a fresh unique code for a new tenant, in-transaction: smart
- * property-unit code first, suffixed variants, then the random scheme.
+ * Mint a fresh unique KDXXXX code for a new tenant, in-transaction.
  * Called BEFORE the tenant insert so the row is born with its code.
+ * unitId is kept in the signature (callers pass it) but plays no role:
+ * codes are random, never derived from property/unit names.
  */
 export async function mintAccountCodeFor(
   ctx: MutationCtx,
-  orgId: Id<"orgs">,
-  unitId: Id<"units"> | undefined,
+  _orgId: Id<"orgs">,
+  _unitId: Id<"units"> | undefined,
 ): Promise<string> {
-  let preferred: string | null = null;
-  if (unitId !== undefined) {
-    const unit = await ctx.db.get(unitId);
-    if (unit !== null && unit.orgId === orgId) {
-      const property =
-        unit.propertyId === undefined
-          ? null
-          : await ctx.db.get(unit.propertyId);
-      preferred = smartAccountCode(property?.name, unit.label);
-    }
-  }
-  return await uniqueAccountCode(ctx, preferred);
+  return await uniqueAccountCode(ctx);
 }
 
 export type C2bPayload = {
@@ -333,27 +304,22 @@ async function anomalyScan(
 }
 
 /**
- * Layered tenant match for a confirmation hit:
- *  1. exact account code (BillRefNumber, case-insensitive),
- *  2. national ID (tenants know it by heart — accepted as-is),
- *  3. sender phone: exact when the full MSISDN arrives, single-pattern
- *     hit when C2B v2 masks it (2547***126), hint-only otherwise,
- *  4. unmatched → pending review, never dropped.
+ * Tenant match for a confirmation hit: the account code is the ONLY key
+ * that auto-matches. Anything else (unknown code, missing code) parks in
+ * review, where suggestC2bTenant ranks likely tenants from sender name,
+ * national ID, and phone — staff pick, never auto-match, so a wrong
+ * suggestion costs one click, not wrong money.
  *
- * Layers log which key matched so staff can see a hit matched loosely.
- * Skips layers cleanly when data is missing instead of failing.
+ * orgId === null is platform-paybill scope: the code routes across every
+ * org (codes are minted globally unique).
  */
 async function matchTenant(
   ctx: MutationCtx,
   orgId: Id<"orgs"> | null,
   billRef: string | undefined,
-  msisdn: string,
+  _msisdn: string,
 ): Promise<Match> {
-  // orgId === null is platform-paybill scope: the account code routes
-  // across every org (codes are minted globally unique), so a single
-  // unambiguous hit anywhere resolves the payer.
   const ref = (billRef ?? "").trim().toUpperCase();
-  const digits = ref.replace(/\D/g, "");
   if (ref !== "") {
     const byCode = await ctx.db
       .query("tenants")
@@ -362,59 +328,9 @@ async function matchTenant(
     if (byCode !== null && (orgId === null || byCode.orgId === orgId)) {
       return { tenantId: byCode._id, reason: `account code ${ref}` };
     }
-    // National ID fallback: tenants type the ID they already know instead
-    // of the issued code. Requires a single unambiguous hit — duplicates
-    // fall through to the review queue rather than guessing.
-    if (digits !== "" && digits.length >= 6) {
-      const tenants =
-        orgId === null
-          ? await ctx.db.query("tenants").collect()
-          : await ctx.db
-              .query("tenants")
-              .withIndex("by_org", (q) => q.eq("orgId", orgId))
-              .collect();
-      const hits = tenants.filter(
-        (t) => t.national_id.replace(/\D/g, "") === digits,
-      );
-      if (hits.length === 1) {
-        return { tenantId: hits[0]._id, reason: "national ID" };
-      }
-    }
+    return { tenantId: null, reason: `no tenant for account "${billRef}"` };
   }
-  // Sender phone: masked or SHA-256 hash form — auto-match only a single
-  // unambiguous fit.
-  const tenants =
-    orgId === null
-      ? await ctx.db.query("tenants").collect()
-      : await ctx.db
-          .query("tenants")
-          .withIndex("by_org", (q) => q.eq("orgId", orgId))
-          .collect();
-  const fits = tenants.filter(
-    (t) => t.status !== "moved_out" && msisdnMatch(msisdn, t.phone) !== "none",
-  );
-  const exact = fits.filter((t) => msisdnMatch(msisdn, t.phone) === "exact");
-  const single = exact.length === 1 ? exact[0] : fits.length === 1 ? fits[0] : null;
-  if (single !== null) {
-    const kind = msisdnMatch(msisdn, single.phone);
-    return {
-      tenantId: single._id,
-      reason:
-        kind === "exact"
-          ? ref !== ""
-            ? `sender phone (account "${billRef}" not recognised)`
-            : "sender phone"
-          : `masked sender ${msisdn} fits ${single.full_name} alone`,
-    };
-  }
-  const phone = normalizePhone(msisdn);
-  return {
-    tenantId: null,
-    reason:
-      ref !== ""
-        ? `no tenant for account "${billRef}"${phone || fits.length > 0 ? " or sender phone" : ""}${fits.length > 1 ? ` (${fits.length} share the masked pattern — review)` : ""}`
-        : "no account number and sender phone not recognised",
-  };
+  return { tenantId: null, reason: "no account number given" };
 }
 
 /**
@@ -592,9 +508,13 @@ export const bulkMatchC2bByPhone = mutation({
     let matched = 0;
     let skipped = 0;
     for (const row of queue) {
-      const fits = live.filter((t) => msisdnMatch(row.msisdn, t.phone) !== "none");
-      const exact = fits.filter((t) => msisdnMatch(row.msisdn, t.phone) === "exact");
-      const tenant = exact.length === 1 ? exact[0] : fits.length === 1 ? fits[0] : null;
+      // Account code is the only auto-match key — phone fits are
+      // suggestion-only (see suggestC2bTenant), never bulk-recorded.
+      const ref = (row.billRef ?? "").trim().toUpperCase();
+      const tenant =
+        ref === ""
+          ? null
+          : (live.find((t) => t.accountCode === ref) ?? null);
       if (tenant === null) {
         skipped += 1;
         continue;
@@ -635,10 +555,7 @@ export const bulkMatchC2bByPhone = mutation({
       await ctx.db.patch(row._id, {
         tenantId: tenant._id,
         status: "matched",
-        matchReason:
-          msisdnMatch(row.msisdn, tenant.phone) === "exact"
-            ? `bulk-matched by sender phone to ${tenant.full_name}`
-            : `bulk-matched by masked number ${row.msisdn} to ${tenant.full_name} (lone fit — verify SMS)`,
+        matchReason: `bulk-matched by account code to ${tenant.full_name}`,
         paymentId: res.id,
       });
       await audit(ctx, {
@@ -1380,7 +1297,7 @@ export const backfillAccountCodes = mutation({
     let minted = 0;
     let skipped = 0;
     for (const t of tenants) {
-      if (t.accountCode) {
+      if (t.accountCode && ACCOUNT_CODE_RE.test(t.accountCode)) {
         skipped += 1;
         continue;
       }
@@ -1873,7 +1790,6 @@ export const simulateC2b = query({
     }
     // Same layers as the live path, read-only.
     const ref = (args.billRef ?? "").trim().toUpperCase();
-    const digits = ref.replace(/\D/g, "");
     let match: { tenantId: Id<"tenants">; reason: string } | null = null;
     if (ref !== "") {
       const byCode = await ctx.db
@@ -1882,38 +1798,10 @@ export const simulateC2b = query({
         .first();
       if (byCode !== null && byCode.orgId === args.orgId) {
         match = { tenantId: byCode._id, reason: `account code ${ref}` };
-      } else if (digits !== "" && digits.length >= 6) {
-        const tenants = await ctx.db
-          .query("tenants")
-          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-          .collect();
-        const hits = tenants.filter(
-          (t) => t.national_id.replace(/\D/g, "") === digits,
-        );
-        if (hits.length === 1) {
-          match = { tenantId: hits[0]._id, reason: "national ID" };
-        }
       }
     }
-    if (match === null) {
-      const tenants = await ctx.db
-        .query("tenants")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect();
-      const live = tenants.filter((t) => t.status !== "moved_out");
-      const fits = live.filter((t) => msisdnMatch(args.msisdn, t.phone) !== "none");
-      const exact = fits.filter((t) => msisdnMatch(args.msisdn, t.phone) === "exact");
-      const single = exact.length === 1 ? exact[0] : fits.length === 1 ? fits[0] : null;
-      if (single !== null) {
-        match = {
-          tenantId: single._id,
-          reason:
-            msisdnMatch(args.msisdn, single.phone) === "exact"
-              ? "sender phone"
-              : `masked sender ${args.msisdn} fits ${single.full_name} alone`,
-        };
-      }
-    }
+    // National ID and sender-phone fits are suggestion-only (below) —
+    // never auto-matched.
     // FIFO preview for the matched tenant (same sort as the ledger).
     let preview: { month: string; balance: number; applied: number }[] = [];
     let leftover = amount;

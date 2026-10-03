@@ -70,7 +70,8 @@ export function TenantsPage() {
     }
   };
 
-  const missingCodes = tenants.filter((t) => !t.account_code).length;
+  const KD_RE = /^KD[A-Z2-9]{4}$/;
+  const missingCodes = tenants.filter((t) => !t.account_code || !KD_RE.test(t.account_code)).length;
 
   const handleBackfill = async () => {
     if (!org) return;
@@ -80,8 +81,8 @@ export function TenantsPage() {
       const res = await backfillAccountCodes(org.id);
       setBackfillMsg(
         res.minted > 0
-          ? `Assigned ${res.minted} Paybill code${res.minted === 1 ? "" : "s"}.`
-          : "Every tenant already has a Paybill code.",
+          ? `Re-issued ${res.minted} Paybill code${res.minted === 1 ? "" : "s"} in the new KDXXXX format. Tell affected tenants their new code.`
+          : "Every tenant already has a new-format Paybill code.",
       );
       await load();
     } catch (e) {
@@ -116,7 +117,7 @@ export function TenantsPage() {
           <div className="flex gap-2">
             {missingCodes > 0 && (
               <Button variant="secondary" onClick={handleBackfill} disabled={backfillBusy}>
-                {backfillBusy ? "Assigning…" : `Assign Paybill codes (${missingCodes})`}
+                {backfillBusy ? "Re-issuing…" : `Re-issue codes (${missingCodes})`}
               </Button>
             )}
             <Button onClick={() => { setEditing(null); setShowModal(true); }}>Add tenant</Button>
@@ -128,14 +129,14 @@ export function TenantsPage() {
       )}
       {missingCodes > 0 && !backfillMsg && (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-          {missingCodes} tenant{missingCodes === 1 ? " has" : "s have"} no Paybill
-          account code — tenants can't self-serve Paybill until codes exist.{" "}
+          {missingCodes} tenant{missingCodes === 1 ? " has" : "s have"} an old-format Paybill
+          code — re-issue to the KDXXXX format so payments auto-match.{" "}
           <button
             onClick={handleBackfill}
             disabled={backfillBusy}
             className="font-medium underline hover:no-underline"
           >
-            {backfillBusy ? "Assigning…" : "Assign all now"}
+            {backfillBusy ? "Re-issuing…" : "Re-issue now"}
           </button>
         </div>
       )}

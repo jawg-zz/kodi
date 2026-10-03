@@ -81,7 +81,7 @@ async function seedTenant(
       full_name: "Jane Tenant",
       phone,
       national_id: "123",
-      accountCode: "KDI-TEST",
+      accountCode: "KDTEST",
       unitId,
       deposit_held: 20000,
       status: "active",
@@ -123,7 +123,7 @@ function confirm(
       shortcode: SHORTCODE,
       transId: "TRX-1",
       transAmount: 20800,
-      billRef: "KDI-TEST",
+      billRef: "KDTEST",
       msisdn: "254700000001",
       firstName: "Jane",
       ...overrides,
@@ -150,18 +150,18 @@ test("C2B confirmation matches by account code and records the ledger", async ()
   expect(inv?.balance).toBe(0);
 });
 
-test("C2B confirmation falls back to sender phone", async () => {
+test("C2B confirmation with unknown code parks in review (no phone fallback)", async () => {
   const t = convexTest(schema, modules);
   const { orgId, asStaff } = await seedOrg(t);
   const { tenantId, unitId } = await seedTenant(t, orgId);
   await seedInvoice(t, orgId, tenantId, unitId);
 
   const res = await confirm(t, { transId: "TRX-2", billRef: "WRONG-REF" });
-  expect(res.status).toBe("matched");
+  expect(res.status).toBe("pending_review");
 
   const rows = await asStaff.query(api.c2b.listC2bPayments, { orgId });
   expect(rows.find((r) => r.transId === "TRX-2")?.matchReason).toContain(
-    "sender phone",
+    "no tenant for account",
   );
 });
 
@@ -296,8 +296,8 @@ test("createTenant mints a unique account code", async () => {
     full_name: "Ben Two",
     phone: "254722222222",
   });
-  expect(a.accountCode).toMatch(/^KDI-/);
-  expect(b.accountCode).toMatch(/^KDI-/);
+  expect(a.accountCode).toMatch(/^KD[A-Z2-9]{4}$/);
+  expect(b.accountCode).toMatch(/^KD[A-Z2-9]{4}$/);
   expect(a.accountCode).not.toBe(b.accountCode);
 });
 
@@ -325,7 +325,7 @@ test("matched C2B money shows in collection and breakdown totals", async () => {
   ).toMatchObject({ total: 20800, count: 1 });
 });
 
-test("C2B confirmation matches by national ID", async () => {
+test("C2B confirmation no longer auto-matches by national ID", async () => {
   const t = convexTest(schema, modules);
   const { orgId, asStaff } = await seedOrg(t);
   const { tenantId, unitId } = await seedTenant(t, orgId);
@@ -335,10 +335,10 @@ test("C2B confirmation matches by national ID", async () => {
   await seedInvoice(t, orgId, tenantId, unitId);
 
   const res = await confirm(t, { transId: "TRX-NID", billRef: "33445566" });
-  expect(res.status).toBe("matched");
+  expect(res.status).toBe("pending_review");
   const rows = await asStaff.query(api.c2b.listC2bPayments, { orgId });
   expect(rows.find((r) => r.transId === "TRX-NID")?.matchReason).toContain(
-    "national ID",
+    "no tenant for account",
   );
 });
 
@@ -362,11 +362,10 @@ test("ambiguous national IDs fall through to review", async () => {
   expect(res.status).toBe("pending_review");
 });
 
-test("createTenant prefers readable property-unit codes", async () => {
+test("createTenant mints KDXXXX codes (no property-derived codes)", async () => {
   const t = convexTest(schema, modules);
   const { orgId, asStaff } = await seedOrg(t);
   const { unitId } = await seedTenant(t, orgId);
-  // Second tenant in the same property/unit pattern gets a smart code.
   const unit = await t.run(async (ctx) => ctx.db.get(unitId));
   const propId = unit?.propertyId as Id<"properties">;
   const unit2 = await t.run(async (ctx) =>
@@ -387,7 +386,7 @@ test("createTenant prefers readable property-unit codes", async () => {
     phone: "254733333333",
     unitId: unit2,
   });
-  expect(tenant.accountCode).toBe("GC-A2");
+  expect(tenant.accountCode).toMatch(/^KD[A-Z2-9]{4}$/);
 });
 
 test("suggestC2bTenant ranks by name and phone signals", async () => {
@@ -396,7 +395,7 @@ test("suggestC2bTenant ranks by name and phone signals", async () => {
   const { tenantId } = await seedTenant(t, orgId);
   const res = await confirm(t, {
     transId: "TRX-SUG",
-    billRef: "KDI-TES",
+    billRef: "KDTE5",
     msisdn: "254799999999",
     firstName: "Jane",
     lastName: "Tenant",
@@ -408,20 +407,20 @@ test("suggestC2bTenant ranks by name and phone signals", async () => {
   void tenantId;
 });
 
-test("bulkMatchC2bByPhone matches unambiguous senders", async () => {
+test("bulkMatchC2bByPhone matches rows whose code now resolves", async () => {
   const t = convexTest(schema, modules);
   const { orgId, asStaff } = await seedOrg(t);
   const { tenantId, unitId } = await seedTenant(t, orgId);
   await seedInvoice(t, orgId, tenantId, unitId);
-  // Hit arrives before the tenant's phone is on record: unknown sender, parks.
+  // Hit parks with an unrecognised code; staff correct the tenant's code,
+  // then bulk-match records it.
   await confirm(t, {
     transId: "TRX-BULK",
     billRef: "TYPO",
     msisdn: "254799000111",
   });
-  // Tenant updates their number to the sender phone (SIM change, typo fix).
   await t.run(async (ctx) => {
-    await ctx.db.patch(tenantId, { phone: "254799000111" });
+    await ctx.db.patch(tenantId, { accountCode: "TYPO" });
   });
   const res = await asStaff.mutation(api.c2b.bulkMatchC2bByPhone, { orgId });
   expect(res.matched).toBe(1);
@@ -482,7 +481,7 @@ test("verifyC2bTransaction scores a known sender as low risk", async () => {
   expect(first.status).toBe("matched");
   const second = await confirm(t, {
     transId: "TRX-R2",
-    billRef: "WRONG",
+    billRef: "KDTEST",
     msisdn: "254700000001",
   });
   expect(second.status).toBe("matched");
@@ -621,7 +620,7 @@ test("simulateC2b dry-runs without writing", async () => {
   await seedInvoice(t, orgId, tenantId, unitId);
   const sim = await asStaff.query(api.c2b.simulateC2b, {
     orgId,
-    billRef: "KDI-TEST",
+    billRef: "KDTEST",
     msisdn: "254700000001",
     amount: 25000,
   });
@@ -645,15 +644,17 @@ test("backfillAccountCodes skips coded rows, heals legacy ones", async () => {
   // permits on patch (only inserts/overwrites require it).
 });
 
-test("ensureTenantAccountCode is idempotent on coded rows", async () => {
+test("ensureTenantAccountCode re-issues legacy codes to KDXXXX", async () => {
   const t = convexTest(schema, modules);
   const { orgId, asStaff } = await seedOrg(t);
   const { tenantId } = await seedTenant(t, orgId);
-  const before = await t.run(async (ctx) => ctx.db.get(tenantId));
+  await t.run(async (ctx) => ctx.db.patch(tenantId, { accountCode: "GC-A1" }));
   const code = await asStaff.mutation(api.c2b.ensureTenantAccountCode, {
     tenantId,
   });
-  expect(code).toBe(before?.accountCode);
+  expect(code).toMatch(/^KD[A-Z2-9]{4}$/);
+  const after = await t.run(async (ctx) => ctx.db.get(tenantId));
+  expect(after?.accountCode).toBe(code);
   void orgId;
 });
 
@@ -692,7 +693,7 @@ test("msisdnMatch resolves Daraja SHA-256 sender hashes", async () => {
   expect(msisdnMatch(hash, "0700000001")).toBe("none");
 });
 
-test("v1 hashed sender auto-matches a lone exact fit", async () => {
+test("v1 hashed sender no longer auto-matches (suggestion only)", async () => {
   const t = convexTest(schema, modules);
   const { orgId, asStaff } = await seedOrg(t);
   const { tenantId, unitId } = await seedTenant(t, orgId);
@@ -702,9 +703,15 @@ test("v1 hashed sender auto-matches a lone exact fit", async () => {
     billRef: "WRONG",
     msisdn: sha256.sha256Hex("254700000001"),
   });
-  expect(res.status).toBe("matched");
+  expect(res.status).toBe("pending_review");
   const rows = await asStaff.query(api.c2b.listC2bPayments, { orgId });
-  expect(rows.find((r) => r.transId === "TRX-HASH1")?.matchReason).toContain("sender phone");
+  const row = rows.find((r) => r.transId === "TRX-HASH1");
+  expect(row?.matchReason).toContain("no tenant for account");
+  // …but the sender still surfaces as the top suggestion for one-click match.
+  const sug = await asStaff.query(api.c2b.suggestC2bTenant, { id: row!._id });
+  expect(sug.length).toBeGreaterThan(0);
+  expect(sug[0].tenantId).toBe(tenantId);
+  expect(sug[0].signals).toContain("sender phone");
 });
 
 test("C2B confirmation then STK callback records the money once", async () => {
@@ -712,11 +719,10 @@ test("C2B confirmation then STK callback records the money once", async () => {
   const { orgId, asStaff } = await seedOrg(t);
   const { tenantId, unitId } = await seedTenant(t, orgId);
   await seedInvoice(t, orgId, tenantId, unitId);
-  // C2B confirmation lands first and hash-matches the sender.
+  // C2B confirmation lands first and matches by account code.
   const res = await confirm(t, {
     transId: "TRX-RACE1",
-    billRef: "WRONG",
-    msisdn: sha256.sha256Hex("254700000001"),
+    billRef: "KDTEST",
   });
   expect(res.status).toBe("matched");
   // The STK callback arrives afterwards with the same receipt.
@@ -744,7 +750,7 @@ test("C2B confirmation then STK callback records the money once", async () => {
   expect(pays.length).toBe(1);
 });
 
-test("v2 masked number auto-matches a lone pattern fit", async () => {
+test("v2 masked number no longer auto-matches (suggestions only)", async () => {
   const t = convexTest(schema, modules);
   const { orgId, asStaff } = await seedOrg(t);
   const { tenantId, unitId } = await seedTenant(t, orgId);
@@ -754,9 +760,11 @@ test("v2 masked number auto-matches a lone pattern fit", async () => {
     billRef: "WRONG",
     msisdn: "2547***001",
   });
-  expect(res.status).toBe("matched");
+  expect(res.status).toBe("pending_review");
   const rows = await asStaff.query(api.c2b.listC2bPayments, { orgId });
-  expect(rows.find((r) => r.transId === "TRX-MASK1")?.matchReason).toContain("alone");
+  expect(rows.find((r) => r.transId === "TRX-MASK1")?.matchReason).toContain(
+    "no tenant for account",
+  );
 });
 
 test("v2 masked number shared by two tenants parks for review", async () => {
@@ -873,7 +881,7 @@ test("platform paybill routes by account code across orgs", async () => {
   const { tenantId, unitId } = await seedTenant(t, orgB);
   await seedInvoice(t, orgB, tenantId, unitId);
 
-  const res = await confirm(t, { transId: "TRX-PLAT1", billRef: "KDI-TEST" });
+  const res = await confirm(t, { transId: "TRX-PLAT1", billRef: "KDTEST" });
   expect(res.status).toBe("matched");
 
   const pays = await t.run(async (ctx) => ctx.db.query("payments").collect());
@@ -951,7 +959,7 @@ test("platform STK twin links to the recorded payment, no second ledger write", 
       status: "active" as const,
     });
   });
-  const res = await confirm(t, { transId: "TRX-TWIN1", billRef: "KDI-TEST" });
+  const res = await confirm(t, { transId: "TRX-TWIN1", billRef: "KDTEST" });
   expect(res.status).toBe("matched");
   expect(res.deduplicated).toBe(true);
   const pays = await t.run(async (ctx) => ctx.db.query("payments").collect());
