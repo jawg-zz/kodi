@@ -261,6 +261,146 @@ export const addPlatformAdmin = internalMutation({
   },
 });
 
+/**
+ * First-claim bootstrap: when the allowlist is EMPTY, any signed-in user
+ * may claim the operator hat once. The window closes itself the moment
+ * the first admin exists — afterwards only existing operators can invite.
+ */
+export const claimFirstAdmin = mutation({
+  args: {},
+  returns: v.object({ claimed: v.boolean() }),
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) throw new ConvexError("Not authenticated");
+    const existing = await ctx.db.query("platformAdmins").take(1);
+    if (existing.length > 0) {
+      throw new ConvexError("Operators already exist — ask one of them for an invite.");
+    }
+    await ctx.db.insert("platformAdmins", {
+      userId: identity.subject,
+      createdAt: Date.now(),
+    });
+    return { claimed: true };
+  },
+});
+
+/**
+ * Operator-only: invite a new operator by email. Returns a 7-day token
+ * link (/operator/accept?token=…); claiming binds the invitee's OIDC
+ * subject to the allowlist.
+ */
+export const inviteOperator = mutation({
+  args: { email: v.string() },
+  returns: v.object({ email: v.string(), inviteToken: v.string() }),
+  handler: async (ctx, args) => {
+    const inviter = await requirePlatformAdmin(ctx);
+    const email = args.email.trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      throw new ConvexError("A valid email is required");
+    }
+    const buf = crypto.getRandomValues(new Uint8Array(24));
+    let token = "";
+    for (const b of buf) token += b.toString(16).padStart(2, "0");
+    await ctx.db.insert("operatorInvites", {
+      email,
+      token,
+      expiresAt: Date.now() + 7 * 24 * 3600_000,
+      invitedBy: inviter,
+    });
+    return { email, inviteToken: token };
+  },
+});
+
+/** Accept an operator invite — binds the caller's subject to the allowlist. */
+export const acceptOperatorInvite = mutation({
+  args: { token: v.string() },
+  returns: v.object({ accepted: v.boolean() }),
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) throw new ConvexError("Not authenticated");
+    const invite = await ctx.db
+      .query("operatorInvites")
+      .withIndex("by_token", (q) => q.eq("token", args.token.trim()))
+      .first();
+    if (invite === null) throw new ConvexError("Invite not found");
+    if (invite.expiresAt < Date.now()) {
+      throw new ConvexError("This invite has expired — ask for a new one.");
+    }
+    if (invite.claimedBy !== undefined) {
+      throw new ConvexError("This invite was already used");
+    }
+    const email = identity.email ?? "";
+    if (
+      typeof email !== "string" ||
+      email.trim().toLowerCase() !== invite.email
+    ) {
+      throw new ConvexError("This invite was sent to a different email address — sign in with that email.");
+    }
+    await ctx.db.patch(invite._id, {
+      claimedBy: identity.subject,
+      claimedAt: Date.now(),
+    });
+    const existing = await ctx.db
+      .query("platformAdmins")
+      .withIndex("by_user", (q) => q.eq("userId", identity.subject))
+      .first();
+    if (existing === null) {
+      await ctx.db.insert("platformAdmins", {
+        userId: identity.subject,
+        createdAt: Date.now(),
+      });
+    }
+    return { accepted: true };
+  },
+});
+
+/** Operator-only: list operators and pending invites. */
+export const listOperators = query({
+  args: {},
+  returns: v.object({
+    admins: v.array(
+      v.object({ userId: v.string(), createdAt: v.number() }),
+    ),
+    pending: v.array(
+      v.object({ email: v.string(), expiresAt: v.number() }),
+    ),
+  }),
+  handler: async (ctx) => {
+    await requirePlatformAdmin(ctx);
+    const admins = await ctx.db.query("platformAdmins").collect();
+    const invites = await ctx.db.query("operatorInvites").collect();
+    return {
+      admins: admins.map((a) => ({ userId: a.userId, createdAt: a.createdAt })),
+      pending: invites
+        .filter((i) => i.claimedBy === undefined && i.expiresAt >= Date.now())
+        .map((i) => ({ email: i.email, expiresAt: i.expiresAt })),
+    };
+  },
+});
+
+/** Operator-only: remove an operator (never the last one). */
+export const removeOperator = mutation({
+  args: { userId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const self = await requirePlatformAdmin(ctx);
+    const row = await ctx.db
+      .query("platformAdmins")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .first();
+    if (row === null) throw new ConvexError("Operator not found");
+    const all = await ctx.db.query("platformAdmins").collect();
+    if (all.length <= 1) {
+      throw new ConvexError("Cannot remove the last operator");
+    }
+    if (args.userId === self) {
+      throw new ConvexError("You cannot remove yourself — ask another operator.");
+    }
+    await ctx.db.delete(row._id);
+    return null;
+  },
+});
+
 export async function isSuspendedOrg(
   ctx: QueryCtx,
   orgId: Id<"orgs">,

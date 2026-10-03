@@ -13,6 +13,7 @@ import { PaymentsPage, ReceiptPage } from "./pages/PaymentsPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { OperatorPage } from "./pages/OperatorPage";
+import { OperatorAcceptPage } from "./pages/OperatorAcceptPage";
 import { PortalPage } from "./pages/PortalPage";
 import { InvitePage } from "./pages/InvitePage";
 import { InvoiceDocPage, ReceiptDocPage, RentBookDocPage, SettlementDocPage, StatementDocPage } from "./pages/PrintPages";
@@ -79,6 +80,7 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/invite/:token" element={<InvitePage />} />
+        <Route path="/operator/accept" element={<OperatorAcceptPage />} />
 
         <Route element={<RequireAuth />}>
           <Route path="/onboarding" element={<OnboardingPage />} />

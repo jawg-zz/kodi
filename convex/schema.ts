@@ -552,6 +552,19 @@ export default defineSchema({
   }).index("by_user", ["userId"]),
 
   /**
+   * Operator invites: email → token link (/operator/accept?token=…).
+   * Claiming binds the invitee's OIDC subject to platformAdmins.
+   */
+  operatorInvites: defineTable({
+    email: v.string(),
+    token: v.string(),
+    expiresAt: v.number(),
+    invitedBy: v.string(),
+    claimedBy: v.optional(v.string()),
+    claimedAt: v.optional(v.number()),
+  }).index("by_token", ["token"]),
+
+  /**
    * Platform-wide settings (single doc, key = "global"): fee model for
    * managed-paybill collections, forward cadence and clawback window.
    */

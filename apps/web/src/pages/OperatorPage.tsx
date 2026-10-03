@@ -48,6 +48,10 @@ export function OperatorPage() {
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [operators, setOperators] = useState<{ userId: string; createdAt: number }[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<{ email: string; expiresAt: number }[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
   const { loading: authLoading } = useAuth();
 
   const load = async () => {
@@ -66,6 +70,16 @@ export function OperatorPage() {
       ]);
       setOrgs(rows);
       setLedger(ledgerRows);
+      try {
+        const ops = (await convex.query((api as any).operator.listOperators, {})) as {
+          admins: { userId: string; createdAt: number }[];
+          pending: { email: string; expiresAt: number }[];
+        };
+        setOperators(ops.admins);
+        setPendingInvites(ops.pending);
+      } catch {
+        // listOperators fails for non-admins — page already guards.
+      }
       setFee(feeRow);
       if (feeRow) {
         setFeeForm({ feePct: String(feeRow.feePct), feeCapKes: String(feeRow.feeCapKes) });
@@ -112,6 +126,16 @@ export function OperatorPage() {
       />
       {error && <ErrorBanner message={error} />}
       {msg && <p className="mb-4 text-sm font-medium text-brand-700">{msg}</p>}
+
+      <OperatorsCard
+        operators={operators}
+        pending={pendingInvites}
+        inviteEmail={inviteEmail}
+        setInviteEmail={setInviteEmail}
+        inviteLink={inviteLink}
+        setInviteLink={setInviteLink}
+        onChanged={load}
+      />
 
       <Card className="mb-4">
         <CardBody>
@@ -328,5 +352,117 @@ function OrgRowEditor({ row, onChanged }: { row: OrgRow; onChanged: () => Promis
         {ok && <p className="mt-1 text-xs font-medium text-brand-700">{ok}</p>}
       </td>
     </tr>
+  );
+}
+
+function OperatorsCard({ operators, pending, inviteEmail, setInviteEmail, inviteLink, setInviteLink, onChanged }: {
+  operators: { userId: string; createdAt: number }[];
+  pending: { email: string; expiresAt: number }[];
+  inviteEmail: string;
+  setInviteEmail: (v: string) => void;
+  inviteLink: string | null;
+  setInviteLink: (v: string | null) => void;
+  onChanged: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const invite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteEmail.trim()) return;
+    setBusy(true);
+    setError(null);
+    setInviteLink(null);
+    try {
+      const r = (await convex.mutation((api as any).operator.inviteOperator, {
+        email: inviteEmail.trim(),
+      })) as { email: string; inviteToken: string };
+      setInviteLink(`${window.location.origin}/operator/accept?token=${r.inviteToken}`);
+      setInviteEmail("");
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (userId: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await convex.mutation((api as any).operator.removeOperator, { userId });
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="mb-4">
+      <CardBody>
+        <h2 className="mb-1 font-semibold">Operators</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          People who can open this console, settle money, and change plans.
+        </p>
+        <ul className="mb-3 divide-y divide-slate-100 text-sm">
+          {operators.map((o) => (
+            <li key={o.userId} className="flex items-center justify-between gap-2 py-2">
+              <span>
+                <span className="font-mono text-xs">{o.userId.slice(0, 18)}…</span>
+                <span className="ml-2 text-xs text-slate-500">
+                  since {new Date(o.createdAt).toLocaleDateString("en-GB")}
+                </span>
+              </span>
+              {operators.length > 1 && (
+                <Button size="sm" variant="ghost" className="text-red-600 hover:bg-red-50" onClick={() => remove(o.userId)} disabled={busy}>
+                  Remove
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+        {pending.length > 0 && (
+          <p className="mb-3 text-xs text-slate-500">
+            Pending: {pending.map((p) => p.email).join(", ")}
+          </p>
+        )}
+        <form onSubmit={invite} className="flex max-w-lg flex-wrap items-end gap-2">
+          <Field label="Invite operator by email">
+            <Input
+              type="email"
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              placeholder="ops@example.com"
+              className="max-w-64"
+            />
+          </Field>
+          <Button type="submit" variant="secondary" disabled={busy}>
+            {busy ? "Inviting…" : "Invite operator"}
+          </Button>
+        </form>
+        {error && <div className="mt-2"><ErrorBanner message={error} /></div>}
+        {inviteLink && (
+          <div className="mt-3 space-y-2 rounded-lg border border-slate-200 p-3">
+            <p className="break-all font-mono text-xs text-slate-600">{inviteLink}</p>
+            <div className="flex flex-wrap gap-2">
+              <a
+                href={`https://wa.me/?text=${encodeURIComponent(`Kodi platform operator invite (expires in 7 days): ${inviteLink}`)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700"
+              >
+                Share on WhatsApp
+              </a>
+              <Button size="sm" variant="secondary" onClick={() => { void navigator.clipboard?.writeText(inviteLink); }}>
+                Copy link
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardBody>
+    </Card>
   );
 }

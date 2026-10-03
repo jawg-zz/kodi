@@ -151,3 +151,50 @@ test("suspended org cannot generate invoices", async () => {
     asStaff.mutation(api.invoices.generateInvoices, { orgId, month: "2026-09" }),
   ).rejects.toThrow(/suspended/);
 });
+
+test("first claim bootstraps the first operator, then closes", async () => {
+  const t = convexTest(schema, modules);
+  const asUser = t.withIdentity({ subject: "first-1" });
+  const res = await asUser.mutation(api.operator.claimFirstAdmin, {});
+  expect(res).toEqual({ claimed: true });
+  await expect(
+    t.withIdentity({ subject: "second-1" }).mutation(api.operator.claimFirstAdmin, {}),
+  ).rejects.toThrow(/already exist/);
+});
+
+test("operator invite → accept binds the invitee", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = await seedAdmin(t);
+  const { inviteToken } = await asAdmin.mutation(api.operator.inviteOperator, {
+    email: "ops@example.com",
+  });
+  expect(typeof inviteToken).toBe("string");
+  const rows = await t.run(async (ctx) => ctx.db.query("operatorInvites").collect());
+  expect(rows.length).toBe(1);
+  expect(rows[0].email).toBe("ops@example.com");
+  // Unknown token is rejected.
+  await expect(
+    t.withIdentity({ subject: "ops-1" }).mutation(api.operator.acceptOperatorInvite, {
+      token: "nope",
+    }),
+  ).rejects.toThrow(/not found/);
+});
+
+test("removeOperator keeps the last operator", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = await seedAdmin(t);
+  await expect(
+    asAdmin.mutation(api.operator.removeOperator, { userId: ADMIN.subject }),
+  ).rejects.toThrow(/last operator/);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("platformAdmins", { userId: "admin-2", createdAt: 2 });
+  });
+  await expect(
+    asAdmin.mutation(api.operator.removeOperator, { userId: ADMIN.subject }),
+  ).rejects.toThrow(/yourself/);
+  await t
+    .withIdentity({ subject: "admin-2" })
+    .mutation(api.operator.removeOperator, { userId: ADMIN.subject });
+  const remaining = await t.run(async (ctx) => ctx.db.query("platformAdmins").collect());
+  expect(remaining.map((r) => r.userId)).toEqual(["admin-2"]);
+});
