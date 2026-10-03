@@ -24,6 +24,8 @@ export interface Org {
   invoice_due_day: number;
   /** Reversals at or above this KES need the owner (0 = gate disabled). */
   reversal_limit: number | null;
+  /** Convex storage id of the org logo (absent = platform default). */
+  logoStorageId?: string;
   created_at: string;
 }
 

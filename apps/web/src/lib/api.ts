@@ -1600,6 +1600,60 @@ export async function updateOrg(
   }
 }
 
+/** Signed upload URL for an org logo. */
+export async function logoUploadUrl(orgId: string): Promise<string> {
+  try {
+    return (await convex.mutation((api as any).orgs.logoUploadUrl, {
+      orgId,
+    })) as string;
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Upload a logo file (client-side validated) and attach it to the org. */
+export async function uploadOrgLogo(orgId: string, file: File): Promise<void> {
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type)) {
+    throw new Error("Logo must be a PNG, JPEG, or WebP image.");
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    throw new Error("Logo must be under 5MB.");
+  }
+  const url = await logoUploadUrl(orgId);
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": file.type },
+    body: file,
+  });
+  if (!res.ok) throw new Error("Upload failed — try again.");
+  const { storageId } = (await res.json()) as { storageId: string };
+  try {
+    await convex.mutation((api as any).orgs.setOrgLogo, { orgId, storageId });
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Remove the org logo (falls back to the platform logo). */
+export async function clearOrgLogo(orgId: string): Promise<void> {
+  try {
+    await convex.mutation((api as any).orgs.clearOrgLogo, { orgId });
+  } catch (e) {
+    return err(e);
+  }
+}
+
+/** Display logo URL for an org (own logo, else platform default, else null). */
+export async function getOrgLogo(orgId: string): Promise<string | null> {
+  try {
+    return (await convex.query((api as any).orgs.getOrgLogo, {
+      orgId,
+    })) as string | null;
+  } catch (e) {
+    return err(e);
+  }
+}
+
 export async function createOrg(name: string, planCode: string): Promise<Org> {
   try {
     const row = (await convex.mutation((api as any).orgs.createOrg, {

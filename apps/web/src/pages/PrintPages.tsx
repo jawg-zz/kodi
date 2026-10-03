@@ -4,6 +4,7 @@ import { formatDate, formatDateTime, formatKES, monthLabel } from "@kodi/shared"
 import {
   getInvoice,
   getInvoiceQr,
+  getOrgLogo,
   getPaybillInfo,
   getPayment,
   getSettlement,
@@ -19,7 +20,7 @@ import { Loading, ErrorBanner } from "../components/ui";
 import { Money } from "../components/domain";
 import type { DepositSettlement, InvoiceWithRefs, PaymentWithRefs, Tenant } from "../lib/types";
 
-function DocShell({ orgName, title, stamp, children }: { orgName: string; title: string; stamp?: string; children: React.ReactNode }) {
+function DocShell({ orgName, title, stamp, logoUrl, children }: { orgName: string; title: string; stamp?: string; logoUrl?: string | null; children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-slate-200 py-8 print:bg-white print:py-0">
       <div className="no-print mx-auto mb-4 max-w-[210mm] text-right">
@@ -39,7 +40,14 @@ function DocShell({ orgName, title, stamp, children }: { orgName: string; title:
             {stamp}
           </div>
         )}
-        <div className="border-b-2 border-slate-900 pb-4">
+        <div className="flex items-center gap-3 border-b-2 border-slate-900 pb-4">
+          {logoUrl && (
+            <img
+              src={logoUrl}
+              alt={`${orgName} logo`}
+              className="print-ink h-10 w-auto rounded-lg bg-slate-900 px-2 py-1"
+            />
+          )}
           <h1 className="text-2xl font-bold">{orgName}</h1>
         </div>
         <h2 className="mt-4 text-xl font-bold">{title}</h2>
@@ -87,6 +95,7 @@ export function InvoiceDocPage() {
   const { org } = useAuth();
   const [inv, setInv] = useState<(InvoiceWithRefs & { tenant: (Tenant & { unit_label?: string }) | null }) | null>(null);
   const [orgName, setOrgName] = useState("Kodi");
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [paybill, setPaybill] = useState<{ shortcode: string; account_code: string } | null>(null);
   const [qr, setQr] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -98,6 +107,7 @@ export function InvoiceDocPage() {
       else {
         setInv(data as typeof inv);
         setOrgName(await fetchOrgName(org?.name ?? null));
+        if (org?.id) getOrgLogo(org.id).then(setLogoUrl).catch(() => setLogoUrl(null));
         try {
           const pb = await getPaybillInfo(data.tenant_id);
           if (pb?.registered && pb.account_code) {
@@ -120,6 +130,7 @@ export function InvoiceDocPage() {
   return (
     <DocShell
       orgName={orgName}
+      logoUrl={logoUrl}
       title={`Rent invoice — ${monthLabel(inv.month)}`}
       stamp={inv.balance <= 0 ? "Paid" : undefined}
     >
@@ -184,6 +195,7 @@ export function ReceiptDocPage() {
   const { org } = useAuth();
   const [pay, setPay] = useState<(PaymentWithRefs & { org_id: string }) | null>(null);
   const [orgName, setOrgName] = useState("Kodi");
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -193,6 +205,7 @@ export function ReceiptDocPage() {
       else {
         setPay(data as typeof pay);
         setOrgName(await fetchOrgName(org?.name ?? null));
+        if (org?.id) getOrgLogo(org.id).then(setLogoUrl).catch(() => setLogoUrl(null));
       }
     }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -201,7 +214,7 @@ export function ReceiptDocPage() {
   if (!pay) return <div className="p-10"><Loading label="Loading receipt…" /></div>;
 
   return (
-    <DocShell orgName={orgName} title={`Payment receipt ${pay.receipt_no}`}>
+    <DocShell orgName={orgName} logoUrl={logoUrl} title={`Payment receipt ${pay.receipt_no}`}>
       <div className="mt-3 grid grid-cols-2 gap-4 text-sm">
         <div>
           <p className="text-slate-500">Received from</p>
@@ -260,6 +273,7 @@ export function StatementDocPage() {
   const [payments, setPayments] = useState<PaymentWithRefs[]>([]);
   const [credit, setCredit] = useState(0);
   const [orgName, setOrgName] = useState("Kodi");
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [paybill, setPaybill] = useState<{ shortcode: string; account_code: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -271,6 +285,7 @@ export function StatementDocPage() {
         if (!t) { setError("Tenant not found."); return; }
         setTenant(t);
         setOrgName(await fetchOrgName(org?.name ?? null));
+        if (org?.id) getOrgLogo(org.id).then(setLogoUrl).catch(() => setLogoUrl(null));
         const [inv, pay] = await Promise.all([
           listTenantInvoices(tenantId),
           listTenantPayments(tenantId),
@@ -303,7 +318,7 @@ export function StatementDocPage() {
   const netOwed = Math.max(0, balance - credit);
 
   return (
-    <DocShell orgName={orgName} title={`Tenant statement — ${tenant.full_name}`}>
+    <DocShell orgName={orgName} logoUrl={logoUrl} title={`Tenant statement — ${tenant.full_name}`}>
       <div className="mt-3 space-y-0.5 text-sm text-slate-600">
         <p>{tenant.phone}</p>
         <p>
@@ -358,6 +373,7 @@ export function SettlementDocPage() {
   const { org } = useAuth();
   const [s, setS] = useState<(DepositSettlement & { tenant?: Tenant | null }) | null>(null);
   const [orgName, setOrgName] = useState("Kodi");
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -367,6 +383,7 @@ export function SettlementDocPage() {
       else {
         setS(data as typeof s);
         setOrgName(await fetchOrgName(org?.name ?? null));
+        if (org?.id) getOrgLogo(org.id).then(setLogoUrl).catch(() => setLogoUrl(null));
       }
     }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -375,7 +392,7 @@ export function SettlementDocPage() {
   if (!s) return <div className="p-10"><Loading label="Loading settlement…" /></div>;
 
   return (
-    <DocShell orgName={orgName} title="Deposit settlement">
+    <DocShell orgName={orgName} logoUrl={logoUrl} title="Deposit settlement">
       <div className="mt-3 space-y-0.5 text-sm text-slate-600">
         <p>Tenant: <strong className="text-slate-900">{s.tenant?.full_name}</strong></p>
         <p>Deposit held: <Money value={s.deposit_held} /></p>
@@ -406,6 +423,7 @@ export function RentBookDocPage() {
   const { org } = useAuth();
   const [invoices, setInvoices] = useState<InvoiceWithRefs[]>([]);
   const [orgName, setOrgName] = useState("Kodi");
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [paybill, setPaybill] = useState<{ shortcode: string; account_code: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -416,6 +434,7 @@ export function RentBookDocPage() {
         const rows = await listInvoices(org.id, month);
         setInvoices(rows);
         setOrgName(await fetchOrgName(org.name ?? null));
+        if (org?.id) getOrgLogo(org.id).then(setLogoUrl).catch(() => setLogoUrl(null));
         if (rows[0]) {
           const pb = await getPaybillInfo(rows[0].tenant_id).catch(() => null);
           if (pb?.registered && pb.account_code) setPaybill({ shortcode: pb.shortcode, account_code: pb.account_code });
@@ -434,7 +453,7 @@ export function RentBookDocPage() {
   const totalBalance = invoices.reduce((s, i) => s + i.balance, 0);
 
   return (
-    <DocShell orgName={orgName} title={`Rent book — ${monthLabel(month ?? "")}`}>
+    <DocShell orgName={orgName} logoUrl={logoUrl} title={`Rent book — ${monthLabel(month ?? "")}`}>
       <div className="mt-3 flex flex-wrap justify-between text-sm text-slate-600">
         <span>{invoices.length} invoices</span>
         <span>Due dates fall in {monthLabel(month ?? "")}</span>

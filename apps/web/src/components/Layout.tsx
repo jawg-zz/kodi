@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { Button } from "./Button";
+import { getOrgLogo } from "../lib/api";
 import { convex } from "../lib/convex";
 import { api } from "../../../../convex/_generated/api";
 
@@ -58,6 +59,29 @@ function OrgSwitcher({ compact = false }: { compact?: boolean }) {
   );
 }
 
+/** Org brand mark: own logo, else platform default, else the wordmark. */
+export function OrgBrandMark({ orgId, orgName, dark = true }: {
+  orgId?: string;
+  orgName?: string;
+  dark?: boolean;
+}) {
+  const [url, setUrl] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!orgId) return;
+    getOrgLogo(orgId).then(setUrl).catch(() => setUrl(null));
+  }, [orgId]);
+  if (url) {
+    return (
+      <img
+        src={url}
+        alt={`${orgName ?? "Business"} logo`}
+        className={dark ? "h-7 w-auto rounded-md bg-slate-900 px-1.5 py-0.5" : "h-7 w-auto"}
+      />
+    );
+  }
+  return null;
+}
+
 export function AppLayout() {
   const { org, membership, signOut, profile } = useAuth();
   const navigate = useNavigate();
@@ -74,7 +98,10 @@ export function AppLayout() {
       {/* Desktop sidebar */}
       <aside className="hidden w-60 shrink-0 flex-col bg-slate-900 text-slate-200 lg:flex">
         <div className="border-b border-slate-700 px-5 py-5">
-          <p className="text-xl font-bold text-white">Kodi</p>
+          <div className="flex items-center gap-2">
+            <OrgBrandMark orgId={org?.id} orgName={org?.name} />
+            <p className="text-xl font-bold text-white">Kodi</p>
+          </div>
           <p className="mt-0.5 truncate text-xs text-slate-400">{org?.name ?? "Rent Manager"}</p>
           <OrgSwitcher />
         </div>
@@ -170,11 +197,14 @@ export function PortalLayout() {
     <div className="no-print min-h-screen">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-4 py-4 sm:px-6">
-          <div className="min-w-0">
-            <p className="text-lg font-bold text-slate-900">Kodi</p>
-            <p className="truncate text-xs text-slate-500">
-              {tenant ? `Welcome, ${tenant.full_name}` : "Tenant portal"}
-            </p>
+          <div className="flex min-w-0 items-center gap-2">
+            <OrgBrandMark orgId={tenant?.org_id} orgName="Landlord" dark={false} />
+            <div className="min-w-0">
+              <p className="text-lg font-bold text-slate-900">Kodi</p>
+              <p className="truncate text-xs text-slate-500">
+                {tenant ? `Welcome, ${tenant.full_name}` : "Tenant portal"}
+              </p>
+            </div>
           </div>
           <Button variant="ghost" size="sm" onClick={handleSignOut}>
             Sign out

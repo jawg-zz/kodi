@@ -50,6 +50,11 @@ export default defineSchema({
     payoutTarget: v.optional(v.string()),
     /** Auto-forward settled batches to the landlord (default on). */
     autoForward: v.optional(v.boolean()),
+    /**
+     * Org logo (Convex file storage id). Empty = inherit the platform
+     * org's logo. Served via GET /org-logo?orgId=… (302 → storage URL).
+     */
+    logoStorageId: v.optional(v.string()),
     subscription_period_end: v.optional(v.string()),
     invoice_due_day: v.number(),
     /**

@@ -809,4 +809,28 @@ for (const p of ["/pull-result", "/pull-timeout"]) {
   });
 }
 
+/**
+ * Public org logo: GET /org-logo?orgId=… → 302 to the Convex storage URL.
+ * Logos are public brand marks (same visibility as the org name on
+ * invoices), so no auth — but the id must resolve through an org row or
+ * the platform fallback, never raw user input.
+ */
+http.route({
+  path: "/org-logo",
+  method: "GET",
+  handler: httpAction(async (ctx, req) => {
+    const orgId = new URL(req.url).searchParams.get("orgId") ?? "";
+    if (!/^[a-z0-9]+$/.test(orgId)) {
+      return new Response("missing orgId", { status: 400 });
+    }
+    const org = await ctx.runQuery(internal.orgs.logoStorageFor, {
+      orgId: orgId as never,
+    });
+    if (org === null) return new Response("no logo", { status: 404 });
+    const url = await ctx.storage.getUrl(org);
+    if (url === null) return new Response("no logo", { status: 404 });
+    return Response.redirect(url, 302);
+  }),
+});
+
 export default http;

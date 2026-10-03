@@ -165,6 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             myOrg.org.subscription_period_end ?? null,
           invoice_due_day: myOrg.org.invoice_due_day,
           reversal_limit: (myOrg.org as { reversal_limit?: number }).reversal_limit ?? null,
+          logoStorageId: (myOrg.org as { logoStorageId?: string }).logoStorageId,
           created_at: new Date(myOrg.org._creationTime).toISOString(),
         };
 

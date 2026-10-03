@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PLANS, currentMonthKey, formatKES, planByCode } from "@kodi/shared";
 import { useAuth } from "../lib/auth";
 import {
@@ -45,6 +45,7 @@ import type {
 } from "../lib/types";
 import { Money } from "../components/domain";
 import { Button } from "../components/Button";
+import { clearOrgLogo, getOrgLogo, uploadOrgLogo } from "../lib/api";
 import { Field, Input, Select } from "../components/Field";
 import { Badge, Card, CardBody, ErrorBanner, Loading, PageHeader } from "../components/ui";
 import { useToast } from "../components/Toast";
@@ -126,8 +127,48 @@ function OrgProfileSection() {
   const [reversalLimit, setReversalLimit] = useState(
     String(org?.reversal_limit ?? 50000),
   );
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [logoBusy, setLogoBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!org) return;
+    getOrgLogo(org.id).then(setLogoUrl).catch(() => setLogoUrl(null));
+  }, [org?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pickLogo = async (file: File | undefined) => {
+    if (!org || !file) return;
+    setLogoBusy(true);
+    setError(null);
+    try {
+      await uploadOrgLogo(org.id, file);
+      setLogoUrl(await getOrgLogo(org.id).catch(() => null));
+      await refresh();
+      toast("Logo updated.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLogoBusy(false);
+    }
+  };
+
+  const removeLogo = async () => {
+    if (!org) return;
+    setLogoBusy(true);
+    setError(null);
+    try {
+      await clearOrgLogo(org.id);
+      setLogoUrl(await getOrgLogo(org.id).catch(() => null));
+      await refresh();
+      toast("Logo removed — using the platform logo.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLogoBusy(false);
+    }
+  };
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -156,6 +197,42 @@ function OrgProfileSection() {
       <CardBody>
         <h2 className="mb-3 font-semibold">Business profile</h2>
         <form onSubmit={save} className="grid max-w-lg gap-4">
+          <div>
+            <span className="mb-1 block text-sm font-medium text-slate-700">Logo</span>
+            <div className="flex items-center gap-3">
+              {logoUrl ? (
+                <img
+                  src={logoUrl}
+                  alt={`${org?.name ?? "Business"} logo`}
+                  className="h-12 w-auto rounded-lg bg-slate-900 px-2 py-1"
+                />
+              ) : (
+                <div className="flex h-12 w-24 items-center justify-center rounded-lg bg-slate-100 text-xs text-slate-400">
+                  No logo
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(e) => { void pickLogo(e.target.files?.[0]); e.target.value = ""; }}
+                />
+                <Button type="button" variant="secondary" size="sm" disabled={logoBusy} onClick={() => fileRef.current?.click()}>
+                  {logoBusy ? "Uploading…" : logoUrl ? "Replace" : "Upload"}
+                </Button>
+                {logoUrl && org?.logoStorageId && (
+                  <Button type="button" variant="ghost" size="sm" disabled={logoBusy} onClick={removeLogo}>
+                    Remove
+                  </Button>
+                )}
+              </div>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              PNG, JPEG, or WebP under 5MB. Shows in the sidebar, portal, and on invoices. Empty uses the platform logo.
+            </p>
+          </div>
           <Field label="Business name" required>
             <Input value={name} onChange={(e) => setName(e.target.value)} required />
           </Field>

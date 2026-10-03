@@ -198,3 +198,49 @@ test("removeOperator keeps the last operator", async () => {
   const remaining = await t.run(async (ctx) => ctx.db.query("platformAdmins").collect());
   expect(remaining.map((r) => r.userId)).toEqual(["admin-2"]);
 });
+
+test("setOrgLogo attaches storage id; clearOrgLogo removes it", async () => {
+  // NOTE: setOrgLogo verifies the blob via ctx.db.system.get, which
+  // convex-test cannot emulate (no file storage). The attach path is
+  // seeded directly; clear + fallback exercise the queryable logic.
+  const t = convexTest(schema, modules);
+  const { orgId, asStaff } = await seedOrg(t);
+  await t.run(async (ctx) => ctx.db.patch(orgId, { logoStorageId: "storage-1" } as never));
+  let org = await t.run(async (ctx) => ctx.db.get(orgId));
+  expect(org?.logoStorageId).toBe("storage-1");
+  await asStaff.mutation(api.orgs.clearOrgLogo, { orgId });
+  org = await t.run(async (ctx) => ctx.db.get(orgId));
+  expect(org?.logoStorageId).toBeUndefined();
+});
+
+test("getOrgLogo falls back to the platform org logo", async () => {
+  const t = convexTest(schema, modules);
+  const platformOrg: Id<"orgs"> = await t.run(async (ctx) => {
+    const id = await ctx.db.insert("orgs", {
+      name: "Platform",
+      plan_code: "growth",
+      subscription_status: "active",
+      invoice_due_day: 5,
+      logoStorageId: "platform-logo",
+    });
+    await ctx.db.insert("mpesaCredentials", {
+      orgId: id,
+      environment: "sandbox",
+      consumerKeyEnc: "x",
+      consumerSecretEnc: "y",
+      shortcode: "174379",
+      passkeyEnc: "z",
+      platformPaybill: true,
+    });
+    return id;
+  });
+  const { orgId } = await seedOrg(t);
+  const asStaff = t.withIdentity(STAFF);
+  expect(await asStaff.query(api.orgs.getOrgLogo, { orgId })).toBe(
+    `/org-logo?orgId=${platformOrg}`,
+  );
+  await t.run(async (ctx) => ctx.db.patch(orgId, { logoStorageId: "own-logo" } as never));
+  expect(await asStaff.query(api.orgs.getOrgLogo, { orgId })).toBe(
+    `/org-logo?orgId=${orgId}`,
+  );
+});
