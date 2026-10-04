@@ -560,7 +560,9 @@ for (const kind of ASYNC_KINDS) {
         route: timedOut ? `async-timeout/${kind}` : `async-result/${kind}`,
         transId: originator ?? conversation,
         outcome: resolved === null ? "unknown-job" : code === "0" ? "done" : "failed",
-        detail: desc?.slice(0, 200),
+        detail: resolved === null
+          ? JSON.stringify(body).slice(0, 500)
+          : desc?.slice(0, 200),
         latencyMs: Date.now() - started,
       })
       .catch(() => null);
