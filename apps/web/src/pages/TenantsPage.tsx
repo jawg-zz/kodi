@@ -70,7 +70,7 @@ export function TenantsPage() {
     }
   };
 
-  const KD_RE = /^KD[A-Z2-9]{4}$/;
+  const KD_RE = /^[A-Z2-9]{6}$/;
   const missingCodes = tenants.filter((t) => !t.account_code || !KD_RE.test(t.account_code)).length;
 
   const handleBackfill = async () => {
@@ -81,7 +81,7 @@ export function TenantsPage() {
       const res = await backfillAccountCodes(org.id);
       setBackfillMsg(
         res.minted > 0
-          ? `Re-issued ${res.minted} Paybill code${res.minted === 1 ? "" : "s"} in the new KDXXXX format. Tell affected tenants their new code.`
+          ? `Re-issued ${res.minted} Paybill code${res.minted === 1 ? "" : "s"} in the new 6-character format. Tell affected tenants their new code.`
           : "Every tenant already has a new-format Paybill code.",
       );
       await load();
@@ -130,7 +130,7 @@ export function TenantsPage() {
       {missingCodes > 0 && !backfillMsg && (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           {missingCodes} tenant{missingCodes === 1 ? " has" : "s have"} an old-format Paybill
-          code — re-issue to the KDXXXX format so payments auto-match.{" "}
+          code — re-issue to the 6-character format so payments auto-match.{" "}
           <button
             onClick={handleBackfill}
             disabled={backfillBusy}

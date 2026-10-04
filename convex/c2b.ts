@@ -45,19 +45,19 @@ const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
 /**
  * Paybill account code, the ONLY key that auto-matches a payment to a
- * tenant: "KD" + 4 chars from the confusion-free alphabet (no 0/O/1/I/L).
- * Fixed 6-char length, no hyphens — hyphen is the most-dropped character
- * on phone keypads. ~1.3M combinations; uniqueness via the by_account
- * index loop below.
+ * tenant: 6 chars from the confusion-free alphabet (no 0/O/1/I/L).
+ * No prefix — the by_account index lookup needs no brand marker, and
+ * two fewer characters to type on M-Pesa menus. ~595M combinations;
+ * uniqueness via the by_account index loop below.
  */
-export const ACCOUNT_CODE_RE = /^KD[A-Z2-9]{4}$/;
+export const ACCOUNT_CODE_RE = /^[A-Z2-9]{6}$/;
 
 function mintAccountCode(): string {
-  let suffix = "";
-  for (let i = 0; i < 4; i += 1) {
-    suffix += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
+  let code = "";
+  for (let i = 0; i < 6; i += 1) {
+    code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
   }
-  return `KD${suffix}`;
+  return code;
 }
 
 async function codeTaken(ctx: MutationCtx, code: string): Promise<boolean> {
@@ -73,10 +73,10 @@ async function uniqueAccountCode(ctx: MutationCtx): Promise<string> {
     const code = mintAccountCode();
     if (!(await codeTaken(ctx, code))) return code;
   }
-  // Astronomically unlikely (16 straight collisions in a ~1.3M space);
-  // timestamp suffix keeps the invariant without staff intervention.
+  // Unreachable in practice (16 straight collisions in a ~595M space);
+  // timestamp fallback keeps the invariant without staff intervention.
   for (;;) {
-    const code = `KD${Date.now().toString(36).toUpperCase().replace(/[^A-Z2-9]/g, "X").slice(-4).padStart(4, "X")}`;
+    const code = Date.now().toString(36).toUpperCase().replace(/[^A-Z2-9]/g, "X").slice(-6).padStart(6, "X");
     if (!(await codeTaken(ctx, code))) return code;
   }
 }
@@ -88,8 +88,8 @@ export async function ensureAccountCode(
 ): Promise<string> {
   const tenant = await ctx.db.get(tenantId);
   if (tenant === null) throw new ConvexError("Tenant not found");
-  // Full migration: every call re-issues a KDXXXX code, replacing legacy
-  // smart/KDI-hyphen formats. Idempotent per-tenant only in the sense that
+  // Full migration: every call re-issues a 6-char code, replacing legacy
+  // smart/KDI-hyphen/KDXXXX formats. Idempotent per-tenant only in the sense that
   // callers check ACCOUNT_CODE_RE first (see backfillAccountCodes).
   const code = await mintAccountCodeFor(ctx, tenant.orgId, tenant.unitId);
   await ctx.db.patch(tenantId, { accountCode: code });
@@ -97,7 +97,7 @@ export async function ensureAccountCode(
 }
 
 /**
- * Mint a fresh unique KDXXXX code for a new tenant, in-transaction.
+ * Mint a fresh unique 6-char code for a new tenant, in-transaction.
  * Called BEFORE the tenant insert so the row is born with its code.
  * unitId is kept in the signature (callers pass it) but plays no role:
  * codes are random, never derived from property/unit names.

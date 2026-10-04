@@ -296,8 +296,8 @@ test("createTenant mints a unique account code", async () => {
     full_name: "Ben Two",
     phone: "254722222222",
   });
-  expect(a.accountCode).toMatch(/^KD[A-Z2-9]{4}$/);
-  expect(b.accountCode).toMatch(/^KD[A-Z2-9]{4}$/);
+  expect(a.accountCode).toMatch(/^[A-Z2-9]{6}$/);
+  expect(b.accountCode).toMatch(/^[A-Z2-9]{6}$/);
   expect(a.accountCode).not.toBe(b.accountCode);
 });
 
@@ -362,7 +362,7 @@ test("ambiguous national IDs fall through to review", async () => {
   expect(res.status).toBe("pending_review");
 });
 
-test("createTenant mints KDXXXX codes (no property-derived codes)", async () => {
+test("createTenant mints 6-char codeless codes (no property-derived codes)", async () => {
   const t = convexTest(schema, modules);
   const { orgId, asStaff } = await seedOrg(t);
   const { unitId } = await seedTenant(t, orgId);
@@ -386,7 +386,7 @@ test("createTenant mints KDXXXX codes (no property-derived codes)", async () => 
     phone: "254733333333",
     unitId: unit2,
   });
-  expect(tenant.accountCode).toMatch(/^KD[A-Z2-9]{4}$/);
+  expect(tenant.accountCode).toMatch(/^[A-Z2-9]{6}$/);
 });
 
 test("suggestC2bTenant ranks by name and phone signals", async () => {
@@ -644,7 +644,7 @@ test("backfillAccountCodes skips coded rows, heals legacy ones", async () => {
   // permits on patch (only inserts/overwrites require it).
 });
 
-test("ensureTenantAccountCode re-issues legacy codes to KDXXXX", async () => {
+test("ensureTenantAccountCode re-issues legacy codes to 6-char format", async () => {
   const t = convexTest(schema, modules);
   const { orgId, asStaff } = await seedOrg(t);
   const { tenantId } = await seedTenant(t, orgId);
@@ -652,7 +652,7 @@ test("ensureTenantAccountCode re-issues legacy codes to KDXXXX", async () => {
   const code = await asStaff.mutation(api.c2b.ensureTenantAccountCode, {
     tenantId,
   });
-  expect(code).toMatch(/^KD[A-Z2-9]{4}$/);
+  expect(code).toMatch(/^[A-Z2-9]{6}$/);
   const after = await t.run(async (ctx) => ctx.db.get(tenantId));
   expect(after?.accountCode).toBe(code);
   void orgId;
