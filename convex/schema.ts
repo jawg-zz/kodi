@@ -414,6 +414,8 @@ export default defineSchema({
       v.literal("pull"),
     ),
     conversationId: v.string(),
+    /** Daraja's ConversationID from the accept response — the result callback keys on this. */
+    darajaConversationId: v.optional(v.string()),
     status: v.union(
       v.literal("pending"),
       v.literal("done"),
@@ -428,6 +430,7 @@ export default defineSchema({
     amount: v.optional(v.number()),
   })
     .index("by_conversation", ["conversationId"])
+    .index("by_daraja_conversation", ["darajaConversationId"])
     .index("by_org", ["orgId"])
     .index("by_org_kind", ["orgId", "kind"])
     .index("by_org_status", ["orgId", "status"]),

@@ -81,6 +81,9 @@ export const markJobAccepted = internalMutation({
     const job = await ctx.db.get(args.jobId);
     if (job === null) return null;
     await ctx.db.patch(args.jobId, {
+      ...(args.darajaConversationId
+        ? { darajaConversationId: args.darajaConversationId }
+        : {}),
       resultDesc: `Accepted${args.darajaConversationId ? ` · ${args.darajaConversationId}` : ""} — awaiting Daraja result callback`,
     });
     return null;
@@ -126,6 +129,11 @@ export const resolveJobByConversation = internalMutation({
       job = await ctx.db
         .query("darajaJobs")
         .withIndex("by_conversation", (q) => q.eq("conversationId", id))
+        .first();
+      if (job !== null) break;
+      job = await ctx.db
+        .query("darajaJobs")
+        .withIndex("by_daraja_conversation", (q) => q.eq("darajaConversationId", id))
         .first();
       if (job !== null) break;
     }
