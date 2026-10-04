@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import forge from "node-forge";
 
 /**
@@ -40,19 +41,21 @@ export function mintSecurityCredential(
       "Initiator certificate is not a valid X.509 PEM — paste the M-Pesa public cert from the Daraja portal",
     );
   }
-  const step1 = Buffer.from(initiatorPassword, "utf8").toString("base64");
+  const step1 = forge.util.encode64(
+    forge.util.encodeUtf8(initiatorPassword),
+  );
   let encrypted: string;
   try {
     encrypted = (cert.publicKey as forge.pki.rsa.PublicKey).encrypt(
-      Buffer.from(step1, "utf8").toString("binary"),
+      forge.util.encodeUtf8(step1),
       "RSAES-PKCS1-V1_5",
     );
   } catch {
-    throw new Error(
+    throw new ConvexError(
       "Credential encryption failed — the initiator password may exceed the RSA block size",
     );
   }
-  return Buffer.from(encrypted, "binary").toString("base64");
+  return forge.util.encode64(encrypted);
 }
 
 /** Validate a pasted cert PEM without minting (Settings pre-flight). */
