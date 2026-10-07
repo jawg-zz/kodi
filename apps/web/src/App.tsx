@@ -3,6 +3,7 @@ import { useAuth } from "./lib/auth";
 import { AppLayout, PortalLayout } from "./components/Layout";
 import { Loading } from "./components/ui";
 import { LoginPage, SignupPage } from "./pages/AuthPages";
+import { LandingPage } from "./pages/LandingPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { PropertiesPage } from "./pages/PropertiesPage";
@@ -67,7 +68,9 @@ function HomeRedirect() {
       </div>
     );
   }
-  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  // Guests see the public landing page at `/`; the LandingPage itself
+  // redirects signed-in users onward, so this is only the fallback.
+  if (!isAuthenticated) return <LandingPage />;
   if (tenant && !membership) return <Navigate to="/portal" replace />;
   if (!org) return <Navigate to="/onboarding" replace />;
   return <Navigate to="/app" replace />;
