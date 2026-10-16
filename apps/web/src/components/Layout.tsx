@@ -16,8 +16,8 @@ const links = [
   { to: "/app/settings", label: "Settings" },
 ];
 
-/** KenyaPay ops console (merchant-ops face of this suite). */
-const CONSOLE_URL = import.meta.env.VITE_CONSOLE_URL ?? "https://console.spidmax.win";
+/** KenyaPay ops console (merchant-ops face of this suite, served at /console). */
+const CONSOLE_URL = import.meta.env.VITE_CONSOLE_URL ?? "https://kodi.spidmax.win/console";
 const externalNavClass =
   "flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white";
 

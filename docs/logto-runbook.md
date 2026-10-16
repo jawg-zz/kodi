@@ -28,7 +28,15 @@ with the admin console working.
    - `https://kodi.spidmax.win/auth/silent-renew` (required — the silent-renew
      iframe hits `redirect_uri`, so both must be registered)
 5. Post sign-out redirect URI: `https://kodi.spidmax.win/`.
-6. Copy the **App ID** (Logto uses string IDs, e.g. `abc123xyz`).
+6. **Ops console** (apps/console, same SPA app — one account covers both;
+   the combined deploy serves it at `kodi.spidmax.win/console/`, so its
+   localStorage session is shared with the web app automatically):
+   - Redirect URIs: `https://kodi.spidmax.win/console/auth/callback` and
+     `https://kodi.spidmax.win/console/auth/silent-renew`
+   - Post sign-out redirect URI: `https://kodi.spidmax.win/console/`
+   - (subdomain mode, if ever preferred: `https://console.spidmax.win/...`
+     equivalents — the console derives its base from the URL at runtime.)
+7. Copy the **App ID** (Logto uses string IDs, e.g. `abc123xyz`).
 
 ## 2. Enable email sign-in (required)
 

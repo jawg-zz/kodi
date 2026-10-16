@@ -45,10 +45,16 @@ https://convex.spidmax.win · dashboard https://convexdash.spidmax.win.
   `VITE_LOGTO_APP_ID` in root `.env.local` + `apps/console/.env.production`);
   platformAdmins -> cross-org view incl. simulator feed, orgMembers ->
   own org only (mirror rows hidden), others ConvexError. Tests:
-  `convex/console.test.ts`. The Logto admin must register per-origin
-  redirect URIs `<origin>/auth/callback` + `<origin>/auth/silent-renew`
-  on the shared SPA app; the console SPA handles both by path suffix
-  (no router; see `apps/console/src/lib/logto.ts`).
+  `convex/console.test.ts`. Single-origin deploy: apps/web/Dockerfile
+  builds BOTH SPAs and its nginx serves web at `/` + console at
+  `kodi.spidmax.win/console/` (no subdomain needed); console derives its
+  OIDC base from the URL at runtime (VITE_APP_URL overrides), and shares
+  localStorage with web on the same origin = one login covers both.
+  Logto admin registers (shared SPA app): `https://kodi.spidmax.win/console/auth/callback`,
+  `https://kodi.spidmax.win/console/auth/silent-renew`, post-logout
+  `https://kodi.spidmax.win/console/` (plus web's root URIs).
+  Console handles callback/silent-renew by path suffix (no router;
+  see `apps/console/src/lib/logto.ts`).
 - `npm run dev` / `dev:docs` / `dev:console` — per-app dev servers
 - `npm run typecheck` — web + console
 - Backend deployment env vars (set via `npx convex env set`): CREDENTIALS_KEY

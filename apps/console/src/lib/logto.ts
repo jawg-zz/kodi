@@ -3,6 +3,23 @@ import { UserManager, WebStorageStateStore, type User } from 'oidc-client-ts'
 const issuer = import.meta.env.VITE_LOGTO_ISSUER as string | undefined
 const clientId = import.meta.env.VITE_LOGTO_APP_ID as string | undefined
 
+/**
+ * Absolute base URL of this SPA — origin + path prefix, no trailing slash
+ * (https://kodi.spidmax.win/console, or http://localhost:5174 at root).
+ * VITE_APP_URL overrides; otherwise derived at runtime so the same build
+ * works at any prefix (nginx /console/ alias, subdomain, previews).
+ */
+function appBaseUrl(): string {
+  const override = (import.meta.env.VITE_APP_URL as string | undefined)?.trim().replace(/\/$/, '')
+  if (override && /^https?:\/\//.test(override)) return override
+  const { origin, pathname } = window.location
+  const stripped = pathname.replace(/\/auth\/(?:callback|silent-renew)\/?$/, '')
+  const base = stripped.endsWith('/') ? stripped.slice(0, -1) : stripped
+  return `${origin}${base}`
+}
+
+const BASE = appBaseUrl()
+
 /** Callback/silent-renew are detected by path suffix so any host or
  *  subpath works (base './' builds, kodi.spidmax.win/console, previews). */
 const pathEnds = (suffix: string) =>
@@ -20,16 +37,19 @@ if (!logtoConfigured) {
 /**
  * OIDC client for self-hosted Logto (public SPA client, PKCE).
  * Same issuer/app as the kodi web app: one Logto account = both apps.
- * Tokens live in localStorage (shared across tabs). Redirect URIs to
- * register in the Logto admin: <origin>/auth/callback and
- * <origin>/auth/silent-renew for every console origin (prod + dev).
+ * Tokens live in localStorage (shared across tabs AND with the kodi web
+ * app when both are on the same origin — one login covers the suite).
+ * Redirect URIs to register in the Logto admin (per base):
+ *   <base>/auth/callback and <base>/auth/silent-renew
+ * e.g. https://kodi.spidmax.win/console/auth/callback for the combined
+ * single-origin deploy, or per-origin for subdomain/dev setups.
  */
 export const userManager = new UserManager({
   authority: issuer ?? 'https://placeholder.invalid',
   client_id: clientId ?? 'placeholder',
-  redirect_uri: `${window.location.origin}/auth/callback`,
-  silent_redirect_uri: `${window.location.origin}/auth/silent-renew`,
-  post_logout_redirect_uri: `${window.location.origin}/`,
+  redirect_uri: `${BASE}/auth/callback`,
+  silent_redirect_uri: `${BASE}/auth/silent-renew`,
+  post_logout_redirect_uri: `${BASE}/`,
   response_type: 'code',
   scope: 'openid profile email',
   loadUserInfo: true,
@@ -91,7 +111,7 @@ export function handleAuthRedirect(): Promise<void> {
         } catch (e) {
           console.error('OIDC callback failed:', e)
         } finally {
-          window.history.replaceState({}, '', '/')
+          window.history.replaceState({}, '', `${BASE}/`)
         }
       })()
     }
