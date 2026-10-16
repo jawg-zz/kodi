@@ -5,8 +5,10 @@ import KpiCards, { KPI_ICONS, type Kpi } from './components/KpiCards'
 import { ChannelDonut, CollectionsChart } from './components/Charts'
 import TransactionsTable from './components/TransactionsTable'
 import { AlertsPanel, LiveFeed, ReconCard, SettlementPanel, WebhookHealth } from './components/Panels'
-import { useDashboardData } from './data/useDashboardData'
+import { useDashboardData, CONVEX_ENABLED } from './data/useDashboardData'
 import { formatKES } from './data/generate'
+import { useOptionalAuth } from './lib/auth'
+import { logtoConfigured } from './lib/logto'
 
 const CHANNEL_COLORS: Record<string, string> = {
   'STK Push': '#43b02a',
@@ -26,7 +28,55 @@ function useEffectDocumentTheme(theme: 'dark' | 'light') {
   }, [theme])
 }
 
+/** Login gate: mock mode renders directly; live mode needs a Logto session. */
 export default function App() {
+  const auth = useOptionalAuth()
+  if (CONVEX_ENABLED) {
+    if (auth === null || auth.loading) return <AuthSplash />
+    if (!auth.isAuthenticated) return <SignInScreen />
+  }
+  return <DashboardApp />
+}
+
+function AuthSplash() {
+  return (
+    <div className="login-wrap">
+      <div className="login-card">
+        <div className="brand-logo" style={{ margin: '0 auto' }}>K</div>
+        <div className="brand-name" style={{ marginTop: 14 }}>KenyaPay</div>
+        <div className="login-sub">Restoring session…</div>
+      </div>
+    </div>
+  )
+}
+
+function SignInScreen() {
+  const auth = useOptionalAuth()
+  return (
+    <div className="login-wrap">
+      <div className="login-card">
+        <div className="brand-logo" style={{ margin: '0 auto' }}>K</div>
+        <div className="brand-name" style={{ marginTop: 14 }}>KenyaPay</div>
+        <div className="brand-sub" style={{ marginTop: 2 }}>Merchant Ops Console</div>
+        <p className="login-sub">
+          Platform staff and operators sign in with their Kodi account.
+        </p>
+        <button
+          className="login-btn"
+          onClick={() => void auth?.signIn()}
+          disabled={!logtoConfigured}
+        >
+          Sign in with Kodi
+        </button>
+        {!logtoConfigured && (
+          <p className="login-err">Auth is not configured (VITE_LOGTO_ISSUER / VITE_LOGTO_APP_ID).</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DashboardApp() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [range, setRange] = useState('today')
   const [menuOpen, setMenuOpen] = useState(false)

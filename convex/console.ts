@@ -1,18 +1,24 @@
-import { v } from 'convex/values'
+import { ConvexError, v } from 'convex/values'
 import { query } from './_generated/server'
+import type { QueryCtx } from './_generated/server'
 import type { Id } from './_generated/dataModel'
+import { isPlatformAdmin } from './operator'
 
 /**
  * KenyaPay ops-console read model over kodi's REAL flow tables merged with
- * the /hooks/mpesa mirror feed. Read-only, public (see AGENTS.md: console
- * auth via Logto is a planned follow-up).
+ * the /hooks/mpesa mirror feed.
+ *
+ * Access model (Logto JWT via ctx.auth):
+ *  - platform admins (platformAdmins allowlist) -> cross-org view + mirror
+ *  - org staff (orgMembers)                    -> own org's real flows only
+ *  - anyone else                               -> ConvexError
  *
  * Money-safety rule: a source row only appears if its money is NOT already
  * represented by another source:
  *  - `payments` (mpesa_* methods)  = recognized collections
  *  - `c2bPayments` with paymentId  = excluded (allocated -> already payments)
  *  - `mpesaTransactions` w/ paymentId = excluded (recorded -> already payments)
- *  - mirror `transactions`         = simulator/webhook feed (own lane)
+ *  - mirror `transactions`         = simulator/webhook feed (platform view)
  */
 
 type Channel = 'STK Push' | 'Paybill' | 'Till' | 'USSD' | 'B2C'
@@ -40,6 +46,31 @@ const METHOD_CHANNEL: Record<string, Channel> = {
   mpesa_c2b: 'Paybill',
 }
 
+interface OpsScope {
+  userId: string
+  /** null => platform admin (cross-org); otherwise the caller's single org. */
+  orgId: Id<'orgs'> | null
+}
+
+async function opsScope(ctx: QueryCtx): Promise<OpsScope> {
+  const identity = await ctx.auth.getUserIdentity()
+  if (identity === null) throw new ConvexError('Not authenticated')
+  if (await isPlatformAdmin(ctx)) {
+    return { userId: identity.subject, orgId: null }
+  }
+  const membership = await ctx.db
+    .query('orgMembers')
+    .withIndex('by_user', (q) => q.eq('userId', identity.subject))
+    .first()
+  if (membership !== null) {
+    return { userId: identity.subject, orgId: membership.orgId }
+  }
+  throw new ConvexError('Account is not linked to the platform')
+}
+
+const inScope = <T extends { orgId: Id<'orgs'> }>(scope: OpsScope, row: T) =>
+  scope.orgId === null || row.orgId === scope.orgId
+
 /** Daraja wall-clock "YYYYMMDDHHmmss" in EAT (UTC+3) -> epoch ms. */
 function darajaTime(s: string): number | null {
   if (!/^\d{14}$/.test(s)) return null
@@ -48,23 +79,35 @@ function darajaTime(s: string): number | null {
   return Date.UTC(y, mo - 1, d, h - 3, mi, se)
 }
 
+/** Who is calling, and which view they get — for UI badges. */
+export const whoami = query({
+  args: {},
+  handler: async (ctx) => {
+    const scope = await opsScope(ctx)
+    return { userId: scope.userId, view: scope.orgId === null ? 'platform' : 'org' }
+  },
+})
+
 export const transactions = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    const scope = await opsScope(ctx)
     const limit = Math.min(args.limit ?? 500, 1000)
     const rows: StreamRow[] = []
 
     const tenants = new Map<Id<'tenants'>, { name: string; phone: string }>()
     for (const t of await ctx.db.query('tenants').collect()) {
+      if (scope.orgId !== null && t.orgId !== scope.orgId) continue
       tenants.set(t._id, { name: t.full_name || '—', phone: t.phone ?? '—' })
     }
     const fees = new Map<string, number>()
     for (const p of await ctx.db.query('platformCollections').collect()) {
+      if (!inScope(scope, p)) continue
       fees.set(p.paymentId, p.fee ?? 0)
     }
 
     for (const p of await ctx.db.query('payments').collect()) {
-      if (!MESA_METHODS.has(p.method)) continue
+      if (!MESA_METHODS.has(p.method) || !inScope(scope, p)) continue
       const t = tenants.get(p.tenantId)
       rows.push({
         _id: p._id,
@@ -82,7 +125,7 @@ export const transactions = query({
     }
 
     for (const c of await ctx.db.query('c2bPayments').collect()) {
-      if (c.paymentId) continue
+      if (c.paymentId || !inScope(scope, c)) continue
       rows.push({
         _id: c._id,
         code: c.transId,
@@ -99,7 +142,7 @@ export const transactions = query({
     }
 
     for (const m of await ctx.db.query('mpesaTransactions').collect()) {
-      if (m.paymentId) continue
+      if (m.paymentId || !inScope(scope, m)) continue
       const t = m.tenantId ? tenants.get(m.tenantId) : undefined
       rows.push({
         _id: m._id,
@@ -116,20 +159,23 @@ export const transactions = query({
       })
     }
 
-    for (const d of await ctx.db.query('transactions').order('desc').take(limit)) {
-      rows.push({
-        _id: d._id,
-        code: d.code,
-        reference: d.reference ?? '—',
-        msisdn: d.msisdn ?? '—',
-        payerName: d.payerName ?? '—',
-        amount: d.amount,
-        fee: d.fee,
-        channel: d.channel,
-        status: d.status,
-        source: 'feed',
-        at: d._creationTime,
-      })
+    // Mirror feed has no org — platform view only.
+    if (scope.orgId === null) {
+      for (const d of await ctx.db.query('transactions').order('desc').take(limit)) {
+        rows.push({
+          _id: d._id,
+          code: d.code,
+          reference: d.reference ?? '—',
+          msisdn: d.msisdn ?? '—',
+          payerName: d.payerName ?? '—',
+          amount: d.amount,
+          fee: d.fee,
+          channel: d.channel,
+          status: d.status,
+          source: 'feed',
+          at: d._creationTime,
+        })
+      }
     }
 
     rows.sort((a, b) => b.at - a.at)
@@ -140,6 +186,7 @@ export const transactions = query({
 export const settlements = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    const scope = await opsScope(ctx)
     const limit = Math.min(args.limit ?? 24, 100)
     interface Row {
       _id: string
@@ -153,9 +200,9 @@ export const settlements = query({
     }
     const rows: Row[] = []
 
-    // Platform fee shares, grouped by sweep/payout reference.
     const groups = new Map<string, Row>()
     for (const p of await ctx.db.query('platformCollections').collect()) {
+      if (!inScope(scope, p)) continue
       const key = p.payoutRef ?? 'platform-hold'
       const at = p.settledAt ?? p._creationTime
       const g = groups.get(key)
@@ -178,7 +225,9 @@ export const settlements = query({
     }
     rows.push(...groups.values())
 
-    const deposits = await ctx.db.query('depositSettlements').collect()
+    const deposits = (await ctx.db.query('depositSettlements').collect()).filter((d) =>
+      inScope(scope, d),
+    )
     if (deposits.length) {
       rows.push({
         _id: 'ds-hold',
@@ -192,18 +241,19 @@ export const settlements = query({
       })
     }
 
-    // Mirror batches (simulator roll-ups) pass through untouched.
-    for (const s of await ctx.db.query('settlements').order('desc').take(limit)) {
-      rows.push({
-        _id: s._id,
-        batch: s.batch,
-        amount: s.amount,
-        txCount: s.txCount,
-        bank: s.bank,
-        status: s.status,
-        eta: s.eta ?? '—',
-        at: s._creationTime,
-      })
+    if (scope.orgId === null) {
+      for (const s of await ctx.db.query('settlements').order('desc').take(limit)) {
+        rows.push({
+          _id: s._id,
+          batch: s.batch,
+          amount: s.amount,
+          txCount: s.txCount,
+          bank: s.bank,
+          status: s.status,
+          eta: s.eta ?? '—',
+          at: s._creationTime,
+        })
+      }
     }
 
     rows.sort((a, b) => b.at - a.at)
@@ -225,9 +275,11 @@ const FAILED_JOB = /(fail|error|timeout)/i
 export const webhookHealth = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    const scope = await opsScope(ctx)
     const rows: LogRow[] = []
 
     for (const w of await ctx.db.query('webhookLog').order('desc').take(200)) {
+      if (scope.orgId !== null && w.orgId !== scope.orgId) continue
       rows.push({
         _id: w._id,
         event: w.route,
@@ -238,6 +290,7 @@ export const webhookHealth = query({
     }
 
     for (const j of await ctx.db.query('darajaJobs').order('desc').take(100)) {
+      if (!inScope(scope, j)) continue
       rows.push({
         _id: j._id,
         event: `daraja ${j.kind}`,
@@ -246,14 +299,16 @@ export const webhookHealth = query({
       })
     }
 
-    for (const l of await ctx.db.query('webhookLogs').order('desc').take(100)) {
-      rows.push({
-        _id: l._id,
-        event: l.event,
-        ok: l.ok,
-        latencyMs: l.latencyMs,
-        _creationTime: l._creationTime,
-      })
+    if (scope.orgId === null) {
+      for (const l of await ctx.db.query('webhookLogs').order('desc').take(100)) {
+        rows.push({
+          _id: l._id,
+          event: l.event,
+          ok: l.ok,
+          latencyMs: l.latencyMs,
+          _creationTime: l._creationTime,
+        })
+      }
     }
 
     rows.sort((a, b) => b._creationTime - a._creationTime)
@@ -270,6 +325,7 @@ export const webhookHealth = query({
 export const alerts = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    const scope = await opsScope(ctx)
     interface AlertRow {
       _id: string
       severity: 'high' | 'medium' | 'low'
@@ -281,6 +337,7 @@ export const alerts = query({
     const rows: AlertRow[] = []
 
     for (const a of await ctx.db.query('paymentAlerts').order('desc').take(200)) {
+      if (!inScope(scope, a)) continue
       const severity = /fail|error|stuck|blocked/i.test(a.kind)
         ? 'high'
         : /orphan|unmatched|duplicate|review|pending|hold|mismatch|forward/i.test(a.kind)
@@ -296,14 +353,16 @@ export const alerts = query({
       })
     }
 
-    for (const a of await ctx.db.query('alerts').order('desc').take(200)) {
-      rows.push({
-        _id: a._id,
-        severity: a.severity,
-        title: a.title,
-        detail: a.detail,
-        _creationTime: a._creationTime,
-      })
+    if (scope.orgId === null) {
+      for (const a of await ctx.db.query('alerts').order('desc').take(200)) {
+        rows.push({
+          _id: a._id,
+          severity: a.severity,
+          title: a.title,
+          detail: a.detail,
+          _creationTime: a._creationTime,
+        })
+      }
     }
 
     rows.sort((a, b) => b._creationTime - a._creationTime)

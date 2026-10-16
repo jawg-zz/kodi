@@ -1,7 +1,8 @@
 import {
-  BarChart3, BellRing, Building2, CreditCard, LayoutDashboard, Link2, Menu, Receipt,
+  BarChart3, BellRing, Building2, CreditCard, LayoutDashboard, Link2, LogOut, Menu, Receipt,
   Repeat2, Settings, ShieldCheck, Wallet,
 } from 'lucide-react'
+import { useOptionalAuth } from '../lib/auth'
 
 const WEB_URL = import.meta.env.VITE_WEB_URL ?? 'https://kodi.spidmax.win'
 
@@ -21,6 +22,7 @@ const SECONDARY = [
 ]
 
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const auth = useOptionalAuth()
   return (
     <aside className={`sidebar ${open ? 'open' : ''}`}>
       <div className="brand">
@@ -67,6 +69,14 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
         <div className="api-status" style={{ opacity: 0.75 }}>
           <span className="dot warn" />
           Sandbox · shortcode 174379
+        </div>
+        <div className="side-user">
+          <div className="side-user-id" title={auth?.user?.id}>
+            {auth?.user?.email ?? auth?.user?.id ?? 'not signed in'}
+          </div>
+          <button className="side-signout" onClick={() => void auth?.signOut()}>
+            <LogOut size={13} /> Sign out
+          </button>
         </div>
       </div>
     </aside>
