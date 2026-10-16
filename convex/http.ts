@@ -1,7 +1,7 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { billManagerPost } from "./billManager";
 import { cachedDarajaToken, darajaBase } from "./lib/daraja";
 import { classifyStkCode } from "./lib/stkOutcome";
@@ -833,6 +833,70 @@ http.route({
     if (url === null) return new Response("no logo", { status: 404 });
     return Response.redirect(url, 302);
   }),
+});
+
+/**
+ * KenyaPay dashboard mirror: accepts simulated/simplified Daraja C2B
+ * confirmations and mirrors them into the dashboard's `transactions`
+ * stream (idempotent on TransID). Registration URL for tests:
+ *   https://convex.spidmax.win/hooks/mpesa
+ */
+function dashboardChannel(t?: string): "Paybill" | "Till" | "STK Push" | "USSD" | "B2C" {
+  const s = (t ?? "").toLowerCase();
+  if (s.includes("buy goods") || s.includes("till")) return "Till";
+  if (s.includes("pay bill")) return "Paybill";
+  if (s.includes("withdraw")) return "B2C";
+  if (s.includes("ussd")) return "USSD";
+  return "STK Push";
+}
+
+const dashboardMpesaHandler = httpAction(async (ctx, request) => {
+  const started = Date.now();
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ ResultCode: 1, ResultDesc: "Invalid JSON" }, 400);
+  }
+  const ok = body?.ResultCode === undefined || body.ResultCode === 0;
+  const transId: string | undefined = body.TransID ?? body.CheckoutRequestID;
+
+  if (transId && body.MSISDN !== undefined) {
+    const amount = Number(body.TransAmount ?? 0);
+    await ctx.runMutation(api.transactions.ingest, {
+      code: String(transId),
+      reference: String(body.BillRefNumber ?? body.InvoiceNumber ?? "\u2014"),
+      channel: dashboardChannel(body.TransactionType),
+      direction: "CR",
+      msisdn: String(body.MSISDN),
+      payerName: [body.FirstName, body.MiddleName, body.LastName].filter(Boolean).join(" "),
+      amount,
+      fee: Math.round(amount * 0.0097 * 100) / 100,
+      status: ok ? "success" : "failed",
+      failureReason: ok ? undefined : String(body.ResultDesc ?? "failed"),
+      raw: body,
+    });
+  }
+
+  await ctx.runMutation(api.webhooks.log, {
+    event: body?.TransactionType ? "C2B confirmation" : "callback",
+    endpoint: "/hooks/mpesa",
+    resultCode: body?.ResultCode ?? 0,
+    resultDesc: body?.ResultDesc,
+    latencyMs: Date.now() - started,
+    transId,
+    ok,
+    payload: body,
+  });
+
+  return json({ ResultCode: ok ? 0 : 1, ResultDesc: ok ? "Confirmation Successful" : "Received" });
+});
+
+http.route({ path: "/hooks/mpesa", method: "POST", handler: dashboardMpesaHandler });
+http.route({
+  path: "/hooks/mpesa/validate",
+  method: "POST",
+  handler: httpAction(async () => json({ ResultCode: 0, ResultDesc: "Accepted" })),
 });
 
 export default http;

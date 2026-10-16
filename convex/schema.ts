@@ -587,4 +587,76 @@ export default defineSchema({
     /** Don't forward below this KES (accumulate instead). */
     forwardMinKes: v.number(),
   }).index("by_key", ["key"]),
+
+  // ---- Dashboard tables (KenyaPay merchant console) ----
+
+  merchants: defineTable({
+    name: v.string(),
+    paybill: v.optional(v.string()),
+    till: v.optional(v.string()),
+    shortcode: v.optional(v.string()),
+    contact: v.optional(v.string()),
+  }),
+
+  transactions: defineTable({
+    code: v.string(), // Safaricom TransID, e.g. SFF1HZVGA
+    reference: v.string(), // merchant order/invoice ref
+    channel: v.union(
+      v.literal('STK Push'),
+      v.literal('Paybill'),
+      v.literal('Till'),
+      v.literal('USSD'),
+      v.literal('B2C'),
+    ),
+    direction: v.union(v.literal('CR'), v.literal('DR')),
+    msisdn: v.optional(v.string()),
+    payerName: v.optional(v.string()),
+    amount: v.number(), // KES
+    fee: v.number(), // KES
+    status: v.union(
+      v.literal('success'),
+      v.literal('pending'),
+      v.literal('failed'),
+      v.literal('reversed'),
+    ),
+    failureReason: v.optional(v.string()),
+    source: v.union(v.literal('daraja'), v.literal('seed')), // webhook vs imported
+    raw: v.optional(v.any()),
+  })
+    .index('by_code', ['code'])
+    .index('by_status', ['status'])
+    .index('by_channel', ['channel']),
+
+  settlements: defineTable({
+    batch: v.string(),
+    bank: v.string(),
+    amount: v.number(),
+    txCount: v.number(),
+    status: v.union(
+      v.literal('processing'),
+      v.literal('sent'),
+      v.literal('expected'),
+    ),
+    eta: v.optional(v.string()),
+  }),
+
+  webhookLogs: defineTable({
+    event: v.string(), // C2B confirmation | STK callback | B2C result
+    endpoint: v.string(),
+    resultCode: v.number(),
+    resultDesc: v.optional(v.string()),
+    latencyMs: v.optional(v.number()),
+    transId: v.optional(v.string()),
+    ok: v.boolean(),
+    payload: v.optional(v.any()),
+  }),
+
+  alerts: defineTable({
+    severity: v.union(v.literal('high'), v.literal('medium'), v.literal('low')),
+    title: v.string(),
+    detail: v.string(),
+    count: v.number(),
+    acked: v.boolean(),
+  }),
+
 });

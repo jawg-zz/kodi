@@ -23,4 +23,20 @@ crons.daily(
   {},
 );
 
+/** Dashboard: mark transactions stuck pending over 2h as failed. */
+crons.interval(
+  "expire stuck pendings",
+  { minutes: 60 },
+  internal.settlements.expireStuckPendings,
+  {},
+);
+
+/** Dashboard: queue daily expected-settlement batch from success volume. */
+crons.interval(
+  "roll up settlement batch",
+  { hours: 24 },
+  internal.settlements.rollUpBatch,
+  {},
+);
+
 export default crons;

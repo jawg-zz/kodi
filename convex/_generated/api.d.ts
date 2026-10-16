@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as alerts from "../alerts.js";
 import type * as billManager from "../billManager.js";
 import type * as billManagerInternal from "../billManagerInternal.js";
 import type * as bonga from "../bonga.js";
@@ -46,9 +47,12 @@ import type * as properties from "../properties.js";
 import type * as reconcileInternal from "../reconcileInternal.js";
 import type * as reports from "../reports.js";
 import type * as seed from "../seed.js";
+import type * as settlements from "../settlements.js";
 import type * as tenants from "../tenants.js";
+import type * as transactions from "../transactions.js";
 import type * as verify from "../verify.js";
 import type * as verifyInternal from "../verifyInternal.js";
+import type * as webhooks from "../webhooks.js";
 
 import type {
   ApiFromModules,
@@ -57,6 +61,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  alerts: typeof alerts;
   billManager: typeof billManager;
   billManagerInternal: typeof billManagerInternal;
   bonga: typeof bonga;
@@ -95,9 +100,12 @@ declare const fullApi: ApiFromModules<{
   reconcileInternal: typeof reconcileInternal;
   reports: typeof reports;
   seed: typeof seed;
+  settlements: typeof settlements;
   tenants: typeof tenants;
+  transactions: typeof transactions;
   verify: typeof verify;
   verifyInternal: typeof verifyInternal;
+  webhooks: typeof webhooks;
 }>;
 
 /**
