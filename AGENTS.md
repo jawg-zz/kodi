@@ -35,12 +35,20 @@ https://convex.spidmax.win · dashboard https://convexdash.spidmax.win.
 ## Commands
 - `npm test` / `npm run test:convex` — vitest suites for the backend
 - Console read model: `convex/console.ts` (queries `transactions`/`settlements`/
-  `webhookHealth`/`alerts`) merges REAL kodi flow tables (payments mpesa_*
+  `webhookHealth`/`alerts`/`whoami`) merges REAL kodi flow tables (payments mpesa_*
   methods, c2b orphans, mpesaTransactions, platformCollections,
   depositSettlements, webhookLog, darajaJobs, paymentAlerts) with the
   /hooks/mpesa mirror feed. Money-safety: rows already represented by a
   `payments` record are excluded upstream. Console deep-link envs:
   `VITE_WEB_URL` (console->web), `VITE_CONSOLE_URL` (web->console).
+  Console AUTH: Logto, same issuer/app as web (`VITE_LOGTO_ISSUER`/
+  `VITE_LOGTO_APP_ID` in root `.env.local` + `apps/console/.env.production`);
+  platformAdmins -> cross-org view incl. simulator feed, orgMembers ->
+  own org only (mirror rows hidden), others ConvexError. Tests:
+  `convex/console.test.ts`. The Logto admin must register per-origin
+  redirect URIs `<origin>/auth/callback` + `<origin>/auth/silent-renew`
+  on the shared SPA app; the console SPA handles both by path suffix
+  (no router; see `apps/console/src/lib/logto.ts`).
 - `npm run dev` / `dev:docs` / `dev:console` — per-app dev servers
 - `npm run typecheck` — web + console
 - Backend deployment env vars (set via `npx convex env set`): CREDENTIALS_KEY
