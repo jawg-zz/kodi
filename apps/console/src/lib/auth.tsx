@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { getAccessToken, logtoConfigured, signInRedirect, signOutRedirect, userManager } from './logto'
+import { getFreshUser, logtoConfigured, refreshSession, signInRedirect, signOutRedirect, userManager } from './logto'
 import type { User } from 'oidc-client-ts'
 
 interface AuthUser {
@@ -35,8 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false
-    userManager
-      .getUser()
+    getFreshUser()
       .then((u) => {
         if (!cancelled) {
           setUser(toUser(u))
@@ -91,15 +90,16 @@ export function useConvexAuth(): {
 } {
   const auth = useOptionalAuth()
   const fetchAccessToken = useCallback(async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
-    if (forceRefreshToken) {
-      try {
-        const u = await userManager.signinSilent()
-        return u?.id_token ?? null
-      } catch {
-        return null
-      }
+    try {
+      // refreshSession() only calls signinSilent when a refresh_token
+      // exists (native XHR grant — no iframe); otherwise it returns the
+      // current session or null and Convex's gate reacts accordingly.
+      const u = await refreshSession(forceRefreshToken)
+      if (!u || u.expired) return null
+      return u.id_token ?? u.access_token
+    } catch {
+      return null
     }
-    return getAccessToken()
   }, [])
   return {
     isLoading: auth?.loading ?? false,

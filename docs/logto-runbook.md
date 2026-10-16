@@ -37,6 +37,24 @@ with the admin console working.
    - (subdomain mode, if ever preferred: `https://console.spidmax.win/...`
      equivalents — the console derives its base from the URL at runtime.)
 7. Copy the **App ID** (Logto uses string IDs, e.g. `abc123xyz`).
+8. **Verify every redirect URI actually registered** — a missed step 6 does
+   not break the initial dashboard (the shared web session masks it), it
+   only surfaces later as renewal failures (`ConvexError: Not authenticated`
+   crashes, HTTP 400 `invalid_redirect_uri` in devtools). A registered URI
+   answers the authorize endpoint with a 3xx redirect; an unregistered one
+   with `400 invalid_redirect_uri`:
+
+   ```sh
+   curl -sI 'https://logtoend.spidmax.win/oidc/auth?client_id=<APP_ID>&redirect_uri=https%3A%2F%2Fkodi.spidmax.win%2Fconsole%2Fauth%2Fcallback&response_type=code&scope=openid&state=v&code_challenge=EjR9abcMWxyz1234567890abcdefghijkLmnopqrs&code_challenge_method=S256&prompt=none'
+   ```
+
+   Console renewal model: it requests `offline_access` and renews through
+   the refresh-token grant only (`refreshSession()` in
+   `apps/console/src/lib/logto.ts`) — the silent-renew iframe is disabled
+   (`automaticSilentRenew: false`), so an unregistered silent URI never
+   causes iframe noise; and `ConvexAuthGate` in `apps/console/src/App.tsx`
+   mounts queries only after Convex's backend accepts the token, falling
+   back to the sign-in screen when renewal fails.
 
 ## 2. Enable email sign-in (required)
 

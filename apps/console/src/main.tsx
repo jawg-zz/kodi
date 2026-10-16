@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ConvexProviderWithAuth, ConvexReactClient } from 'convex/react'
-import App from './App.tsx'
+import App, { ConvexAuthGate } from './App.tsx'
 import './index.css'
 import { CONVEX_ENABLED } from './data/useDashboardData'
 import { AuthProvider, useConvexAuth } from './lib/auth'
@@ -18,7 +18,9 @@ function mount() {
       <AuthProvider>
         {convex ? (
           <ConvexProviderWithAuth client={convex} useAuth={useConvexAuth}>
-            <App />
+            <ConvexAuthGate>
+              <App />
+            </ConvexAuthGate>
           </ConvexProviderWithAuth>
         ) : (
           <App />

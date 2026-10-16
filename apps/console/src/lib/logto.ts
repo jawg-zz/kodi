@@ -51,24 +51,68 @@ export const userManager = new UserManager({
   silent_redirect_uri: `${BASE}/auth/silent-renew`,
   post_logout_redirect_uri: `${BASE}/`,
   response_type: 'code',
-  scope: 'openid profile email',
+  scope: 'openid profile email offline_access',
   loadUserInfo: true,
-  automaticSilentRenew: true,
+  // Renewal is driven by Convex's fetchAccessToken → renewSession() below,
+  // which uses the refresh_token grant (XHR). The iframe flow
+  // (automaticSilentRenew / signinSilent without a refresh token) lands on
+  // /oidc/auth, which 400s when silent_redirect_uri is unregistered and
+  // refuses framing (X-Frame-Options) — never open it.
+  automaticSilentRenew: false,
+  monitorSession: false,
   userStore: new WebStorageStateStore({ store: window.localStorage }),
 })
+
+/**
+ * Session renewal via refresh_token (single-flight so a cold-load getUser
+ * and Convex's fetch cannot rotate the shared refresh token concurrently —
+ * Logto rotates on use and rejects the stale copy). Only reaches
+ * signinSilent when a refresh_token exists: oidc-client-ts then takes its
+ * native refresh-token path and never opens the silent-renew iframe.
+ */
+let renewInFlight: Promise<User | null> | null = null
+
+async function renewSession(force: boolean): Promise<User | null> {
+  try {
+    let u: User | null = await userManager.getUser()
+    if (u === null) return null
+    if (!force && !u.expired) return u
+    if (!u.refresh_token) return u.expired ? null : u
+    u = await userManager.signinSilent()
+    return u
+  } catch {
+    // Refresh token expired/revoked or Logto unreachable: report no session;
+    // the app's auth gates fall back to the sign-in screen (top-level
+    // redirect works with the SSO cookie even when iframe renewal can't).
+    return null
+  }
+}
+
+export function refreshSession(force = false): Promise<User | null> {
+  if (renewInFlight === null) {
+    renewInFlight = renewSession(force).finally(() => {
+      renewInFlight = null
+    })
+  }
+  return renewInFlight
+}
+
+/**
+ * User for the auth gate: renewed first when the stored session expired.
+ * (Shares the kodi web app's stored session — same authority + client.)
+ */
+export async function getFreshUser(): Promise<User | null> {
+  return refreshSession(false)
+}
 
 /**
  * Token for Convex setAuth. Convex verifies the ID token (aud = app id);
  * the access token's aud is the API resource and would fail verification.
  */
 export async function getAccessToken(): Promise<string | null> {
-  try {
-    const user: User | null = await userManager.getUser()
-    if (!user || user.expired) return null
-    return user.id_token ?? user.access_token
-  } catch {
-    return null
-  }
+  const u = await getFreshUser()
+  if (!u || u.expired) return null
+  return u.id_token ?? u.access_token
 }
 
 export async function signInRedirect(): Promise<void> {

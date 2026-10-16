@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Component, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useConvexAuth as useConvexAuthState } from 'convex/react'
 import Sidebar from './components/Sidebar'
 import Topbar from './components/Topbar'
 import KpiCards, { KPI_ICONS, type Kpi } from './components/KpiCards'
@@ -50,7 +51,51 @@ function AuthSplash() {
   )
 }
 
-function SignInScreen() {
+/**
+ * Live-mode gate on Convex's own auth state: children (which run useQuery)
+ * mount only after the backend has accepted the token, and unmount the
+ * moment renewal fails — scoped queries can never fire unauthenticated.
+ */
+export function ConvexAuthGate({ children }: { children: ReactNode }) {
+  const { isLoading, isAuthenticated } = useConvexAuthState()
+  if (isLoading) return <AuthSplash />
+  if (!isAuthenticated) {
+    return (
+      <SignInScreen hint="Your session could not be renewed. Sign in again to continue." />
+    )
+  }
+  return <AuthErrorBoundary>{children}</AuthErrorBoundary>
+}
+
+/** Last-resort guard so a stray server error can't blank the console. */
+class AuthErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="login-wrap">
+          <div className="login-card">
+            <div className="brand-logo" style={{ margin: '0 auto' }}>K</div>
+            <div className="login-sub" style={{ maxWidth: 360 }}>
+              Something went wrong: {this.state.error.message}
+            </div>
+            <button className="login-btn" onClick={() => window.location.reload()}>
+              Reload console
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+function SignInScreen({ hint }: { hint?: string }) {
   const auth = useOptionalAuth()
   return (
     <div className="login-wrap">
@@ -59,7 +104,7 @@ function SignInScreen() {
         <div className="brand-name" style={{ marginTop: 14 }}>KenyaPay</div>
         <div className="brand-sub" style={{ marginTop: 2 }}>Merchant Ops Console</div>
         <p className="login-sub">
-          Platform staff and operators sign in with their Kodi account.
+          {hint ?? 'Platform staff and operators sign in with their Kodi account.'}
         </p>
         <button
           className="login-btn"
