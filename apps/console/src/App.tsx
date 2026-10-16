@@ -116,7 +116,11 @@ function DashboardApp() {
 
   return (
     <div className="app">
-      <Sidebar open={menuOpen} onClose={() => setMenuOpen(false)} />
+      <Sidebar
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        counts={{ transactions: txs.length, settlements: settlements.length, alerts: alerts.length }}
+      />
       {menuOpen && (
         <div
           onClick={() => setMenuOpen(false)}
@@ -134,9 +138,11 @@ function DashboardApp() {
         />
 
         <main className="content">
-          <KpiCards kpis={kpis} />
+          <div id="sec-overview">
+            <KpiCards kpis={kpis} />
+          </div>
 
-          <section className="grid-2">
+          <section className="grid-2" id="sec-charts">
             <div className="card panel">
               <div className="panel-head">
                 <div>
@@ -165,16 +171,16 @@ function DashboardApp() {
             </div>
           </section>
 
-          <TransactionsTable txs={txs} live />
+          <TransactionsTable txs={txs} live id="sec-transactions" />
 
           <section className="grid-3">
-            <SettlementPanel settlements={settlements} />
-            <WebhookHealth logs={webhooks} />
-            <AlertsPanel alerts={alerts} />
+            <SettlementPanel settlements={settlements} id="sec-settlements" />
+            <WebhookHealth logs={webhooks} id="sec-webhooks" />
+            <AlertsPanel alerts={alerts} id="sec-alerts" />
           </section>
 
           <section className="grid-2">
-            <ReconCard matched={matched} unmatched={unmatched} value={txs.filter((t) => t.status === 'success').reduce((s, t) => s + t.amount, 0)} />
+            <ReconCard matched={matched} unmatched={unmatched} value={txs.filter((t) => t.status === 'success').reduce((s, t) => s + t.amount, 0)} id="sec-recon" />
             <div className="card panel">
               <div className="panel-head">
                 <div>

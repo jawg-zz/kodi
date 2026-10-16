@@ -270,6 +270,12 @@ tbody tr:hover { background: color-mix(in srgb, var(--surface-3) 55%, transparen
 .side-signout { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: var(--text-2); font-size: 11.5px; font-weight: 650; cursor: pointer; }
 .side-signout:hover { color: var(--red); }
 
+/* Sidebar scroll-to-section targets clear the sticky topbar. */
+[id^="sec-"] { scroll-margin-top: 80px; }
+.nav-item.soon { opacity: 0.42; cursor: default; }
+.nav-item.soon:hover { background: none; color: var(--text-2); }
+.soon-tag { margin-left: auto; padding: 1px 6px; border-radius: 5px; font-size: 8.5px; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); background: var(--surface-3); border: 1px solid var(--border); }
+
 .table-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; font-size: 12.5px; color: var(--text-3); }
 .pager { display: flex; gap: 6px; }
 .pager button {

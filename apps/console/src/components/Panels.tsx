@@ -27,11 +27,11 @@ export function LiveFeed({ txs }: { txs: Tx[] }) {
   )
 }
 
-export function SettlementPanel({ settlements }: { settlements: Settlement[] }) {
+export function SettlementPanel({ settlements, id }: { settlements: Settlement[]; id?: string }) {
   const inbound = settlements.reduce((s, x) => s + x.amount, 0)
   const pending = settlements.filter((s) => s.status !== 'settled')
   return (
-    <div className="card panel">
+    <div className="card panel" id={id}>
       <div className="panel-head">
         <div>
           <div className="panel-title">Settlements</div>
@@ -57,11 +57,11 @@ export function SettlementPanel({ settlements }: { settlements: Settlement[] }) 
   )
 }
 
-export function WebhookHealth({ logs }: { logs: WebhookLog[] }) {
+export function WebhookHealth({ logs, id }: { logs: WebhookLog[]; id?: string }) {
   const okRate = (logs.filter((l) => l.ok).length / logs.length) * 100
   const p95 = [...logs].map((l) => l.ms).sort((a, b) => a - b)[Math.floor(logs.length * 0.9)] ?? 0
   return (
-    <div className="card panel">
+    <div className="card panel" id={id}>
       <div className="panel-head">
         <div>
           <div className="panel-title">Webhook delivery</div>
@@ -92,10 +92,10 @@ export function WebhookHealth({ logs }: { logs: WebhookLog[] }) {
   )
 }
 
-export function AlertsPanel({ alerts }: { alerts: Alert[] }) {
+export function AlertsPanel({ alerts, id }: { alerts: Alert[]; id?: string }) {
   const Icon = { critical: AlertTriangle, warning: Clock, info: Info }
   return (
-    <div className="card panel">
+    <div className="card panel" id={id}>
       <div className="panel-head">
         <div>
           <div className="panel-title">Risk & alerts</div>
@@ -122,10 +122,10 @@ export function AlertsPanel({ alerts }: { alerts: Alert[] }) {
   )
 }
 
-export function ReconCard({ matched, unmatched, value }: { matched: number; unmatched: number; value: number }) {
+export function ReconCard({ matched, unmatched, value, id }: { matched: number; unmatched: number; value: number; id?: string }) {
   const pct = (matched / (matched + unmatched)) * 100
   return (
-    <div className="card panel">
+    <div className="card panel" id={id}>
       <div className="panel-head">
         <div>
           <div className="panel-title">Auto-reconciliation</div>

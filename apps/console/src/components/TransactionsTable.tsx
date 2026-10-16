@@ -20,7 +20,7 @@ const time = (at: number) =>
 
 const PAGE_SIZE = 9
 
-export default function TransactionsTable({ txs, live }: { txs: Tx[]; live: boolean }) {
+export default function TransactionsTable({ txs, live, id }: { txs: Tx[]; live: boolean; id?: string }) {
   const [q, setQ] = useState('')
   const [status, setStatus] = useState<StatusFilter>('all')
   const [channel, setChannel] = useState('all')
@@ -59,7 +59,7 @@ export default function TransactionsTable({ txs, live }: { txs: Tx[]; live: bool
     sort === key ? (dir === 'desc' ? <ArrowDown size={11} /> : <ArrowUp size={11} />) : null
 
   return (
-    <div className="card panel">
+    <div className="card panel" id={id}>
       <div className="panel-head">
         <div>
           <div className="panel-title">
