@@ -1,7 +1,9 @@
 import {
-  BarChart3, BellRing, CreditCard, LayoutDashboard, Link2, Menu, Receipt,
+  BarChart3, BellRing, Building2, CreditCard, LayoutDashboard, Link2, Menu, Receipt,
   Repeat2, Settings, ShieldCheck, Wallet,
 } from 'lucide-react'
+
+const WEB_URL = import.meta.env.VITE_WEB_URL ?? 'https://kodi.spidmax.win'
 
 const PRIMARY = [
   { icon: LayoutDashboard, label: 'Overview', active: true },
@@ -49,6 +51,13 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
           {item.badge && <span className="badge-n">{item.badge}</span>}
         </button>
       ))}
+
+      <div className="nav-label">Suite</div>
+      <a className="nav-item" href={WEB_URL} target="_blank" rel="noreferrer" title="Landlord app (kodi)">
+        <Building2 size={16} />
+        Kodi landlord app
+        <span className="badge-n" aria-hidden>↗</span>
+      </a>
 
       <div className="side-foot">
         <div className="api-status">

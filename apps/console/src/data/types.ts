@@ -12,6 +12,8 @@ export interface Tx {
   channel: Channel
   status: TxStatus
   reference: string
+  /** Which flow produced this row: rent allocation, c2b orphan, stk attempt, or webhook feed. */
+  source?: 'rent' | 'c2b' | 'stk' | 'feed'
   at: number
 }
 

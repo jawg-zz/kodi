@@ -34,6 +34,13 @@ https://convex.spidmax.win · dashboard https://convexdash.spidmax.win.
 
 ## Commands
 - `npm test` / `npm run test:convex` — vitest suites for the backend
+- Console read model: `convex/console.ts` (queries `transactions`/`settlements`/
+  `webhookHealth`/`alerts`) merges REAL kodi flow tables (payments mpesa_*
+  methods, c2b orphans, mpesaTransactions, platformCollections,
+  depositSettlements, webhookLog, darajaJobs, paymentAlerts) with the
+  /hooks/mpesa mirror feed. Money-safety: rows already represented by a
+  `payments` record are excluded upstream. Console deep-link envs:
+  `VITE_WEB_URL` (console->web), `VITE_CONSOLE_URL` (web->console).
 - `npm run dev` / `dev:docs` / `dev:console` — per-app dev servers
 - `npm run typecheck` — web + console
 - Backend deployment env vars (set via `npx convex env set`): CREDENTIALS_KEY

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '../../../../convex/_generated/api'
-import type { Doc } from '../../../../convex/_generated/dataModel'
 import type {
   Alert, DayPoint, HourPoint, Settlement, Tx, WebhookLog,
 } from './types'
@@ -25,18 +24,33 @@ export interface DashboardData {
 const SETTLE_MAP = { sent: 'settled', processing: 'in transit', expected: 'pending' } as const
 const ALERT_MAP = { high: 'critical', medium: 'warning', low: 'info' } as const
 
-function toTx(t: Doc<'transactions'>): Tx {
+type StreamRow = {
+  _id: string
+  code: string
+  reference: string
+  msisdn: string
+  payerName: string
+  amount: number
+  fee: number
+  channel: Tx['channel']
+  status: Tx['status']
+  source?: Tx['source']
+  at: number
+}
+
+function toStreamTx(t: StreamRow): Tx {
   return {
     id: t._id,
     code: t.code,
-    msisdn: t.msisdn ?? '—',
-    name: t.payerName ?? '—',
+    msisdn: t.msisdn,
+    name: t.payerName,
     amount: t.amount,
     fee: t.fee,
     channel: t.channel,
     status: t.status,
     reference: t.reference,
-    at: t._creationTime,
+    source: t.source,
+    at: t.at,
   }
 }
 
@@ -99,18 +113,18 @@ function useMockData(rangeDays: number): DashboardData {
 }
 
 function useConvexData(rangeDays: number): DashboardData {
-  const txDocs = useQuery(api.transactions.list, { limit: 500 })
-  const settlementDocs = useQuery(api.settlements.list, {})
-  const webhookData = useQuery(api.webhooks.recentLogs, { limit: 8 })
-  const alertDocs = useQuery(api.alerts.list, {})
+  const txRows = useQuery(api.console.transactions, { limit: 500 })
+  const settlementDocs = useQuery(api.console.settlements, { limit: 24 })
+  const webhookData = useQuery(api.console.webhookHealth, { limit: 8 })
+  const alertDocs = useQuery(api.console.alerts, { limit: 40 })
 
   const loading =
-    txDocs === undefined ||
+    txRows === undefined ||
     settlementDocs === undefined ||
     webhookData === undefined ||
     alertDocs === undefined
 
-  const txs = (txDocs ?? []).map(toTx)
+  const txs = (txRows ?? []).map(toStreamTx)
 
   const settlements: Settlement[] = (settlementDocs ?? []).map((s) => ({
     id: s._id,
@@ -135,7 +149,7 @@ function useConvexData(rangeDays: number): DashboardData {
     id: a._id,
     level: ALERT_MAP[a.severity],
     title: a.title,
-    detail: a.detail,
+    detail: a.detail ?? '—',
     at: a._creationTime,
   }))
 

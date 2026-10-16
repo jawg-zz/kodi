@@ -253,6 +253,10 @@ tbody tr:hover { background: color-mix(in srgb, var(--surface-3) 55%, transparen
 .badge.pending2 { color: var(--amber); background: rgba(245, 165, 36, 0.12); }
 
 .chan { font-size: 11.5px; font-weight: 650; padding: 3px 8px; border-radius: 7px; border: 1px solid var(--border); color: var(--text-2); background: var(--surface-2); }
+.src-tag { display: inline-block; margin-left: 6px; padding: 1px 5px; border-radius: 5px; font-size: 8.5px; font-weight: 750; letter-spacing: 0.07em; text-transform: uppercase; vertical-align: 1px; color: var(--text-3); background: var(--surface-3); border: 1px solid var(--border); }
+.src-tag[data-src="rent"] { color: #43b02a; border-color: color-mix(in srgb, #43b02a 40%, transparent); }
+.src-tag[data-src="c2b"] { color: #35c2d6; border-color: color-mix(in srgb, #35c2d6 40%, transparent); }
+.src-tag[data-src="stk"] { color: #4f8cff; border-color: color-mix(in srgb, #4f8cff 40%, transparent); }
 
 .table-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; font-size: 12.5px; color: var(--text-3); }
 .pager { display: flex; gap: 6px; }

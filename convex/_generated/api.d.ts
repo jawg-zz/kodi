@@ -16,6 +16,7 @@ import type * as bongaInternal from "../bongaInternal.js";
 import type * as c2b from "../c2b.js";
 import type * as collect from "../collect.js";
 import type * as collectInternal from "../collectInternal.js";
+import type * as console from "../console.js";
 import type * as crons from "../crons.js";
 import type * as darajaJobs from "../darajaJobs.js";
 import type * as demo from "../demo.js";
@@ -69,6 +70,7 @@ declare const fullApi: ApiFromModules<{
   c2b: typeof c2b;
   collect: typeof collect;
   collectInternal: typeof collectInternal;
+  console: typeof console;
   crons: typeof crons;
   darajaJobs: typeof darajaJobs;
   demo: typeof demo;

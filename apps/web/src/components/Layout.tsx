@@ -16,6 +16,11 @@ const links = [
   { to: "/app/settings", label: "Settings" },
 ];
 
+/** KenyaPay ops console (merchant-ops face of this suite). */
+const CONSOLE_URL = import.meta.env.VITE_CONSOLE_URL ?? "https://console.spidmax.win";
+const externalNavClass =
+  "flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white";
+
 function useIsOperator() {
   const [isOp, setIsOp] = useState(false);
   useEffect(() => {
@@ -116,6 +121,9 @@ export function AppLayout() {
               Operator
             </NavLink>
           )}
+          <a href={CONSOLE_URL} target="_blank" rel="noreferrer" className={externalNavClass}>
+            Ops console <span aria-hidden>↗</span>
+          </a>
         </nav>
         <div className="border-t border-slate-700 p-4 text-xs">
           <p className="truncate text-slate-300">{profile?.full_name || "Account"}</p>
@@ -161,6 +169,15 @@ export function AppLayout() {
                 Operator
               </NavLink>
             )}
+            <a
+              href={CONSOLE_URL}
+              target="_blank"
+              rel="noreferrer"
+              className={externalNavClass}
+              onClick={() => setMenuOpen(false)}
+            >
+              Ops console <span aria-hidden>↗</span>
+            </a>
             <div className="border-t border-slate-700 pt-3 text-xs text-slate-400">
               <p className="px-3 truncate">{profile?.full_name || "Account"}</p>
               <p className="px-3 mt-0.5">{membership?.role}</p>

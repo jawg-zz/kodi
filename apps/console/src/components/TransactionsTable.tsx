@@ -122,7 +122,10 @@ export default function TransactionsTable({ txs, live }: { txs: Tx[]; live: bool
                     </span>
                   </div>
                 </td>
-                <td className="mono">{t.code}</td>
+                <td className="mono">
+                  {t.code}
+                  {t.source && <span className="src-tag" data-src={t.source}>{t.source}</span>}
+                </td>
                 <td className="mono">{t.reference}</td>
                 <td><span className="chan">{t.channel}</span></td>
                 <td className="num" style={{ color: 'var(--text-3)', fontWeight: 500 }}>
