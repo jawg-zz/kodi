@@ -69,3 +69,8 @@ https://convex.spidmax.win · dashboard https://convexdash.spidmax.win.
 2. `users` + `auth*` tables are system-managed — not part of the app schema.
 3. Deployment data includes sensitive PII (national IDs, phones,
    mpesaCredentials) — exports/backups are sensitive files.
+4. `apps/console` (M-Pesa Merchant Console, served at
+   kodi.spidmax.win/console) is a SINGLE-PAGE dashboard with NO router:
+   sidebar nav = scroll-to-section (`sec-*` ids on panels in App.tsx) +
+   scroll-spy/active states inside `components/Sidebar.tsx`. New console
+   sections need an `id` prop or section id + a Sidebar nav target.
