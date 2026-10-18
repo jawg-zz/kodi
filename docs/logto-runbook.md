@@ -114,7 +114,52 @@ LOGTO_APP_ID=<string app id>
 Plus the full discovery JSON (or at least `issuer` + `jwks_uri` lines) so
 `convex/auth.config.ts` can be filled in exactly.
 
-## 6. What dev does next (no action for you)
+## 7. Upgrading Logto (or restarting a DB that is behind)
+
+Symptom — the container crash-loops and every Logto host 404s at the edge
+(Traefik has no healthy backend to route to):
+
+```text
+info  Seeding skipped
+pre   error Found undeployed database alterations, you must deploy them first by npm run alteration deploy command.
+index error Error: Undeployed database alterations found.
+```
+
+Cause: the image tag was bumped (or `postgres-data` is a volume from an
+older install), so the schema is behind the alteration scripts bundled in
+the image. The stock entrypoint only runs `logto db seed --swe`, and `--swe`
+**skips seeding whenever the configs table already exists** ("Seeding
+skipped") — so it never advances the schema, and core refuses to boot.
+
+Fix — deploy alterations before `npm start`. There is no TTY in Docker, so
+the target MUST be passed explicitly (`latest`); omitting it throws
+`Missing target version`:
+
+```sh
+npm run cli db alteration deploy latest
+```
+
+Back up first — alterations mutate the schema:
+
+```sh
+docker compose exec logto-postgres pg_dump -U logto logto > logto-backup.sql
+```
+
+Then confirm the DB caught up (timestamp should equal the newest bundled
+alteration). The state lives in the `systems` table (`_logto_configs` on
+very old installs):
+
+```sh
+docker compose exec logto-postgres psql -U logto -d logto \
+  -c "select * from systems where key = 'alterationState';"
+docker compose exec app npm run cli db alteration list | tail -3
+```
+
+A **fresh** database is unaffected: `seed` stamps the latest alteration
+timestamp itself, so `deploy latest` is a no-op there — safe to run on
+every start.
+
+## 8. What dev does next (no action for you)
 
 Backend `convex/auth.config.ts` switches to
 `{ issuer: LOGTO_ISSUER, jwks: <jwks_uri>, algorithm: "RS256",

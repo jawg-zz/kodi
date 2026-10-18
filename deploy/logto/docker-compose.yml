@@ -1,0 +1,58 @@
+# Self-hosted Logto (core OIDC + admin console) for Kodi.
+#
+# Dokploy compose service. Required env (set in the Dokploy dashboard):
+#   LOGTO_POSTGRES_PASSWORD   password for the bundled postgres
+#   LOGTO_ENDPOINT            public core OIDC base, e.g. https://logtoend.spidmax.win
+#   LOGTO_ADMIN_ENDPOINT      public admin console base, e.g. https://logto.spidmax.win
+#
+# ENDPOINT is what lands in the discovery doc's `issuer` and must match
+# convex/auth.config.ts byte-for-byte (including the /oidc suffix Kodi uses).
+#
+# The stock Logto entrypoint (`db seed --swe && npm start`) is kept, but
+# `--swe` SKIPS seeding whenever the configs table already exists, so a
+# version bump leaves the schema behind and core refuses to boot with
+# "Found undeployed database alterations". `alteration deploy latest` closes
+# that gap on every start and is a no-op on a fresh database (seed stamps the
+# latest alteration timestamp itself). Without an explicit target the CLI
+# throws "Missing target version" — there is no TTY in a container.
+
+services:
+  app:
+    image: ghcr.io/logto-io/logto:1.45.0
+    restart: unless-stopped
+    depends_on:
+      logto-postgres:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        npm run cli db seed -- --swe &&
+        npm run cli db alteration deploy latest &&
+        npm start
+    environment:
+      TRUST_PROXY_HEADER: 1
+      DB_URL: postgres://logto:${LOGTO_POSTGRES_PASSWORD}@logto-postgres:5432/logto
+      ENDPOINT: ${LOGTO_ENDPOINT}
+      ADMIN_ENDPOINT: ${LOGTO_ADMIN_ENDPOINT}
+    volumes:
+      - logto-connectors:/etc/logto/packages/core/connectors
+
+  logto-postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: logto
+      POSTGRES_PASSWORD: ${LOGTO_POSTGRES_PASSWORD}
+      POSTGRES_DB: logto
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logto -d logto"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  logto-connectors:
+  postgres-data:

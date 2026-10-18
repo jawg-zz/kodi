@@ -82,6 +82,15 @@ https://convex.spidmax.win · dashboard https://convexdash.spidmax.win.
 - Backend deployment env vars (set via `npx convex env set`): CREDENTIALS_KEY
   (encrypts Daraja secrets), MPESA_CALLBACK_URL (public convex site URL +
   callback path), JWKS/JWT_PRIVATE_KEY (Logto auth).
+- Logto (self-hosted, Dokploy compose service): `deploy/logto/docker-compose.yml`.
+  Two public hosts — core OIDC (ENDPOINT, what apps/backend point at) and
+  admin console (ADMIN_ENDPOINT). Upgrade lesson: the stock entrypoint
+  `db seed --swe && npm start` crash-loops on a version bump because `--swe`
+  skips seeding when the configs table exists, leaving undeployed alterations
+  → core refuses to boot → Traefik 404s EVERY path on both hosts, which the
+  browser misreports as a CORS error on the discovery URL. Our entrypoint adds
+  `db alteration deploy latest` (target is mandatory: no TTY in a container).
+  See docs/logto-runbook.md §7.
 
 ## Data-safety lessons (learned the hard way, 2026-10-16)
 1. A schema push from a schema that omits a table unregisters the tablet AND
