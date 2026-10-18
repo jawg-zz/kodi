@@ -35,17 +35,23 @@ https://convex.spidmax.win · dashboard https://convexdash.spidmax.win.
 ## Commands
 - `npm test` / `npm run test:convex` — vitest suites for the backend
 - Console read model: `convex/console.ts` (queries `transactions`/`settlements`/
-  `webhookHealth`/`alerts`/`whoami`) merges REAL kodi flow tables (payments mpesa_*
-  methods, c2b orphans, mpesaTransactions, platformCollections,
-  depositSettlements, webhookLog, darajaJobs, paymentAlerts) with the
-  /hooks/mpesa mirror feed. Money-safety: rows already represented by a
+  `webhookHealth`/`alerts`/`whoami`/`transactionDetail`) merges REAL kodi flow
+  tables (payments mpesa_* methods, c2b orphans, mpesaTransactions,
+  platformCollections, depositSettlements, webhookLog, darajaJobs,
+  paymentAlerts) with the /hooks/mpesa mirror feed. `transactionDetail`
+  (`{source, id}`) returns one row's full lifecycle for the drawer — payment +
+  platformCollections fee/settlement + checkout + tenant/org + matching
+  `webhookLog`/`webhookLogs` deliveries + raw payload — scope-checked like
+  every other query (feed rows are platform-admin only).
+  Money-safety: rows already represented by a
   `payments` record are excluded upstream. Console deep-link envs:
   `VITE_WEB_URL` (console->web), `VITE_CONSOLE_URL` (web->console).
   Console AUTH: Logto, same issuer/app as web (`VITE_LOGTO_ISSUER`/
   `VITE_LOGTO_APP_ID` in root `.env.local` + `apps/console/.env.production`);
   platformAdmins -> cross-org view incl. simulator feed, orgMembers ->
   own org only (mirror rows hidden), others ConvexError. Tests:
-  `convex/console.test.ts`. Single-origin deploy: apps/web/Dockerfile
+  `convex/console.test.ts` + `convex/console.detail.test.ts`. Single-origin
+  deploy: apps/web/Dockerfile
   builds BOTH SPAs and its nginx serves web at `/` + console at
   `kodi.spidmax.win/console/` (no subdomain needed); console derives its
   OIDC base from the URL at runtime (VITE_APP_URL overrides), and shares
@@ -55,6 +61,22 @@ https://convex.spidmax.win · dashboard https://convexdash.spidmax.win.
   `https://kodi.spidmax.win/console/` (plus web's root URIs).
   Console handles callback/silent-renew by path suffix (no router;
   see `apps/console/src/lib/logto.ts`).
+  Console AUTH GATING (learned the hard way): queries must never fire on
+  Logto state alone — `useConvexAuth()` reports the BACKEND's verdict.
+  `ConvexAuthGate` (App.tsx, wired in main.tsx under
+  `ConvexProviderWithAuth useAuth={useConvexAuth}`) mounts the dashboard only
+  once Convex accepts the token, else the sign-in screen; renewal is
+  refresh-token only (`automaticSilentRenew`/`monitorSession` OFF — Logto's
+  /oidc/auth sets X-Frame-Options: SAMEORIGIN, so an iframe can never work).
+- Console view state lives in the URL (no router): `?q=&range=&channel=&status=&txn=`
+  + `#sec-*` hash. `lib/urlState.ts` — `useTxUrlState()` merges patches onto a
+  re-parse of the CURRENT location.search, so independent hook instances
+  (App: q/range, TransactionsTable: channel/status/txn) never clobber each
+  other. Defaults are omitted for clean URLs; params are validated against
+  allowlists (`STK Push` needs URL encoding). Row click -> `?txn=<code>` opens
+  the detail drawer. Pause/live semantics: `lib/liveView.ts`
+  (`watermark`/`countNewer`) — while paused the table renders a frozen
+  snapshot and a "N new transactions" banner.
 - `npm run dev` / `dev:docs` / `dev:console` — per-app dev servers
 - `npm run typecheck` — web + console
 - Backend deployment env vars (set via `npx convex env set`): CREDENTIALS_KEY

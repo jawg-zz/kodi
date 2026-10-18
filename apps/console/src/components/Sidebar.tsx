@@ -100,9 +100,25 @@ export default function Sidebar({
     pinnedRef.current = item.target === 'sec-overview' ? null : item.target
     ignoreSpyUntilRef.current = performance.now() + 700
     document.getElementById(item.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    // Deep-linkable section: hash carries the section, query (filters etc.) stays.
+    window.history.replaceState(null, '', `${window.location.search}#${item.target}`)
     setActive(item.target)
     onClose()
   }
+
+  // Land on the hash section when the page is opened via a #section link.
+  useEffect(() => {
+    const hash = window.location.hash.replace('#', '')
+    const known = [...PRIMARY, ...SECONDARY].some((i) => i.target === hash)
+    if (!hash || !known) return
+    const t = window.setTimeout(() => {
+      pinnedRef.current = hash
+      ignoreSpyUntilRef.current = performance.now() + 700
+      document.getElementById(hash)?.scrollIntoView({ block: 'start' })
+      setActive(hash)
+    }, 150)
+    return () => window.clearTimeout(t)
+  }, [])
 
   const countFor = (label: string) =>
     label === 'Transactions' ? counts?.transactions

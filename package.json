@@ -15,8 +15,8 @@
     "build:docs": "npm run build -w apps/docs",
     "typecheck": "npm run typecheck -w apps/web && npm run typecheck -w apps/console",
     "typecheck:docs": "npm run typecheck -w apps/docs",
-    "test": "npm run test -w packages/shared && npx vitest run convex/reports.test.ts convex/payments.test.ts convex/c2b.test.ts convex/demo.test.ts convex/daraja.test.ts convex/console.test.ts convex/initiator.test.ts convex/extended.test.ts --root .",
-    "test:convex": "npx vitest run convex/reports.test.ts convex/payments.test.ts convex/c2b.test.ts convex/demo.test.ts convex/daraja.test.ts convex/initiator.test.ts convex/extended.test.ts convex/operator.test.ts convex/forwarder.test.ts convex/console.test.ts --root .",
+    "test": "npm run test -w packages/shared && npx vitest run convex/reports.test.ts convex/payments.test.ts convex/c2b.test.ts convex/demo.test.ts convex/daraja.test.ts convex/console.test.ts convex/console.detail.test.ts convex/initiator.test.ts convex/extended.test.ts apps/console/src/lib/urlState.test.ts apps/console/src/lib/liveView.test.ts --root .",
+    "test:convex": "npx vitest run convex/reports.test.ts convex/payments.test.ts convex/c2b.test.ts convex/demo.test.ts convex/daraja.test.ts convex/initiator.test.ts convex/extended.test.ts convex/operator.test.ts convex/forwarder.test.ts convex/console.test.ts convex/console.detail.test.ts --root .",
     "dev:console": "npm run dev -w apps/console",
     "build:console": "npm run build -w apps/console",
     "typecheck:console": "npm run typecheck -w apps/console"

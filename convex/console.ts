@@ -369,3 +369,262 @@ export const alerts = query({
     return rows.slice(0, Math.min(args.limit ?? 40, 100))
   },
 })
+
+/** Lifecycle detail for one transactions-stream row (drawer view). */
+export const transactionDetail = query({
+  args: {
+    source: v.union(
+      v.literal('rent'),
+      v.literal('c2b'),
+      v.literal('stk'),
+      v.literal('feed'),
+    ),
+    id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const scope = await opsScope(ctx)
+    const out: {
+      payment?: {
+        amount: number
+        method: string
+        mpesaCode?: string
+        receiptNo: string
+        paidAt: number
+        status: string
+        note?: string
+        recordedBy?: string
+        leftoverCredit?: number
+        allocations: { amount: number; month?: string }[]
+      }
+      tenant?: { name: string; phone: string }
+      org?: { name: string }
+      collection?: {
+        amount: number
+        fee?: number
+        settledAt?: number
+        payoutRef?: string
+        settleKind?: string
+      }
+      checkout?: {
+        checkoutRequestId: string
+        merchantRequestId?: string
+        status: string
+        resultCode?: number
+        resultDesc?: string
+        mpesaReceipt?: string
+        amount: number
+        viaPlatform?: boolean
+        initiatedBy?: string
+        at: number
+      }
+      c2b?: {
+        transId: string
+        transAmount: number
+        billRef?: string
+        msisdn: string
+        name?: string
+        transTime?: string
+        status: string
+        matchReason?: string
+        rawPayload?: string
+        at: number
+      }
+      feed?: {
+        code: string
+        reference?: string
+        direction: string
+        failureReason?: string
+        source: string
+        raw?: unknown
+        at: number
+      }
+      webhooks: {
+        at: number
+        event: string
+        ok: boolean
+        detail?: string
+        latencyMs?: number
+        kind: 'kodi' | 'mirror'
+      }[]
+    } = { webhooks: [] }
+
+    // M-Pesa codes this row may appear under in webhook logs (≤ 3 candidates).
+    const candidates = new Set<string>()
+
+    if (args.source === 'rent') {
+      const pid = ctx.db.normalizeId('payments', args.id)
+      const p = pid ? await ctx.db.get(pid) : null
+      if (!p || !inScope(scope, p)) return null
+      const tenant = await ctx.db.get(p.tenantId)
+      const org = await ctx.db.get(p.orgId)
+      const collection = await ctx.db
+        .query('platformCollections')
+        .withIndex('by_payment', (q) => q.eq('paymentId', p._id))
+        .first()
+      const checkout = p.checkoutRequestId
+        ? await ctx.db
+            .query('mpesaTransactions')
+            .withIndex('by_checkout', (q) => q.eq('checkoutRequestId', p.checkoutRequestId!))
+            .first()
+        : null
+      out.payment = {
+        amount: p.amount,
+        method: p.method,
+        mpesaCode: p.mpesaCode,
+        receiptNo: p.receiptNo,
+        paidAt: p.paidAt,
+        status: p.status ?? 'active',
+        note: p.note,
+        recordedBy: p.recordedBy,
+        leftoverCredit: p.leftoverCredit,
+        allocations: p.allocations,
+      }
+      if (tenant) out.tenant = { name: tenant.full_name || '—', phone: tenant.phone ?? '—' }
+      if (org) out.org = { name: org.name }
+      if (collection) {
+        out.collection = {
+          amount: collection.amount,
+          fee: collection.fee,
+          settledAt: collection.settledAt,
+          payoutRef: collection.payoutRef,
+          settleKind: collection.settleKind,
+        }
+      }
+      if (checkout) {
+        out.checkout = {
+          checkoutRequestId: checkout.checkoutRequestId,
+          merchantRequestId: checkout.merchantRequestId,
+          status: checkout.status,
+          resultCode: checkout.resultCode,
+          resultDesc: checkout.resultDesc,
+          mpesaReceipt: checkout.mpesaReceipt,
+          amount: checkout.amount,
+          viaPlatform: checkout.viaPlatform,
+          initiatedBy: checkout.initiatedBy,
+          at: checkout._creationTime,
+        }
+      }
+      if (p.mpesaCode) candidates.add(p.mpesaCode)
+      candidates.add(p.receiptNo)
+    } else if (args.source === 'c2b') {
+      const cid = ctx.db.normalizeId('c2bPayments', args.id)
+      const c = cid ? await ctx.db.get(cid) : null
+      if (!c || !inScope(scope, c)) return null
+      const linked = c.paymentId ? await ctx.db.get(c.paymentId) : null
+      out.c2b = {
+        transId: c.transId,
+        transAmount: c.transAmount,
+        billRef: c.billRef,
+        msisdn: c.msisdn,
+        name: [c.firstName, c.lastName].filter(Boolean).join(' ') || undefined,
+        transTime: c.transTime,
+        status: c.status,
+        matchReason: c.matchReason,
+        rawPayload: c.rawPayload,
+        at: (c.transTime && darajaTime(c.transTime)) || c._creationTime,
+      }
+      if (linked && inScope(scope, linked)) {
+        out.payment = {
+          amount: linked.amount,
+          method: linked.method,
+          mpesaCode: linked.mpesaCode,
+          receiptNo: linked.receiptNo,
+          paidAt: linked.paidAt,
+          status: linked.status ?? 'active',
+          allocations: linked.allocations,
+        }
+      }
+      candidates.add(c.transId)
+    } else if (args.source === 'stk') {
+      const mid = ctx.db.normalizeId('mpesaTransactions', args.id)
+      const m = mid ? await ctx.db.get(mid) : null
+      if (!m || !inScope(scope, m)) return null
+      const linked = m.paymentId ? await ctx.db.get(m.paymentId) : null
+      const tenant = await ctx.db.get(m.tenantId)
+      out.checkout = {
+        checkoutRequestId: m.checkoutRequestId,
+        merchantRequestId: m.merchantRequestId,
+        status: m.status,
+        resultCode: m.resultCode,
+        resultDesc: m.resultDesc,
+        mpesaReceipt: m.mpesaReceipt,
+        amount: m.amount,
+        viaPlatform: m.viaPlatform,
+        initiatedBy: m.initiatedBy,
+        at: m._creationTime,
+      }
+      if (tenant) out.tenant = { name: tenant.full_name || '—', phone: tenant.phone ?? '—' }
+      if (linked && inScope(scope, linked)) {
+        out.payment = {
+          amount: linked.amount,
+          method: linked.method,
+          mpesaCode: linked.mpesaCode,
+          receiptNo: linked.receiptNo,
+          paidAt: linked.paidAt,
+          status: linked.status ?? 'active',
+          allocations: linked.allocations,
+        }
+      }
+      candidates.add(m.checkoutRequestId)
+      if (m.mpesaReceipt) candidates.add(m.mpesaReceipt)
+    } else {
+      // Mirror feed is platform-view only.
+      if (scope.orgId !== null) return null
+      const did = ctx.db.normalizeId('transactions', args.id)
+      const d = did ? await ctx.db.get(did) : null
+      if (!d) return null
+      out.feed = {
+        code: d.code,
+        reference: d.reference,
+        direction: d.direction,
+        failureReason: d.failureReason,
+        source: d.source,
+        raw: d.raw,
+        at: d._creationTime,
+      }
+      candidates.add(d.code)
+    }
+
+    // Webhook delivery evidence matching this transaction's codes.
+    if (candidates.size > 0) {
+      const codes = [...candidates]
+      const kodiLogs = await ctx.db
+        .query('webhookLog')
+        .filter((q) =>
+          q.or(...codes.map((c) => q.eq(q.field('transId'), c))),
+        )
+        .take(12)
+      for (const l of kodiLogs) {
+        out.webhooks.push({
+          at: l._creationTime,
+          event: l.route,
+          ok: !/fail|error|timeout|reject/i.test(l.outcome),
+          detail: l.detail ?? l.outcome,
+          latencyMs: l.latencyMs,
+          kind: 'kodi',
+        })
+      }
+      if (scope.orgId === null) {
+        const mirrorLogs = await ctx.db
+          .query('webhookLogs')
+          .filter((q) =>
+            q.or(...codes.map((c) => q.eq(q.field('transId'), c))),
+          )
+          .take(12)
+        for (const l of mirrorLogs) {
+          out.webhooks.push({
+            at: l._creationTime,
+            event: l.event,
+            ok: l.ok,
+            detail: l.resultDesc,
+            latencyMs: l.latencyMs,
+            kind: 'mirror',
+          })
+        }
+      }
+    }
+
+    out.webhooks.sort((a, b) => b.at - a.at)
+    return out
+  },
+})

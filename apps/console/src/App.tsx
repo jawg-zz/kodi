@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useConvexAuth as useConvexAuthState } from 'convex/react'
 import Sidebar from './components/Sidebar'
 import Topbar from './components/Topbar'
@@ -10,6 +10,8 @@ import { useDashboardData, CONVEX_ENABLED } from './data/useDashboardData'
 import { formatKES } from './data/generate'
 import { useOptionalAuth } from './lib/auth'
 import { logtoConfigured } from './lib/logto'
+import { useTxUrlState } from './lib/urlState'
+import { countNewer, watermark } from './lib/liveView'
 
 const CHANNEL_COLORS: Record<string, string> = {
   'STK Push': '#43b02a',
@@ -123,11 +125,29 @@ function SignInScreen({ hint }: { hint?: string }) {
 
 function DashboardApp() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
-  const [range, setRange] = useState('today')
   const [menuOpen, setMenuOpen] = useState(false)
+  const [url, setUrl] = useTxUrlState()
+  const range = url.range
   const days = range === '7d' ? 7 : range === '30d' ? 30 : range === 'qtd' ? 45 : 0
 
   const { txs, settlements, webhooks, alerts, series } = useDashboardData(days)
+
+  // Live-update ergonomics: while paused the table holds a frozen snapshot
+  // (reading stability); arrivals are counted, not rendered, until resume.
+  const [paused, setPaused] = useState(false)
+  const frozenRef = useRef<typeof txs>([])
+  const [frozenAt, setFrozenAt] = useState(0)
+  const togglePause = () => {
+    if (paused) {
+      setPaused(false)
+    } else {
+      frozenRef.current = txs
+      setFrozenAt(watermark(txs))
+      setPaused(true)
+    }
+  }
+  const tableTxs = paused ? frozenRef.current : txs
+  const newCount = paused ? countNewer(txs, frozenAt) : 0
 
   useEffectDocumentTheme(theme)
 
@@ -178,7 +198,9 @@ function DashboardApp() {
           theme={theme}
           onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
           range={range}
-          onRange={setRange}
+          onRange={(v) => setUrl({ range: v })}
+          search={url.q}
+          onSearch={(q) => setUrl({ q })}
           onOpenMenu={() => setMenuOpen(true)}
         />
 
@@ -216,7 +238,16 @@ function DashboardApp() {
             </div>
           </section>
 
-          <TransactionsTable txs={txs} live id="sec-transactions" />
+          <TransactionsTable
+            txs={tableTxs}
+            live
+            id="sec-transactions"
+            q={url.q}
+            onQ={(q) => setUrl({ q })}
+            paused={paused}
+            newCount={newCount}
+            onTogglePause={togglePause}
+          />
 
           <section className="grid-3">
             <SettlementPanel settlements={settlements} id="sec-settlements" />
